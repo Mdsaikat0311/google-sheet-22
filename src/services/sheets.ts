@@ -4134,6 +4134,90 @@ export const getStoredListProductNames = (): string[] => {
 };
 
 /**
+ * Fetch business name from 'List' sheet Row 2 Column E (Cell E2)
+ * Dynamic and updates live whenever changed in Google Sheet
+ */
+export const fetchListSheetBusinessName = async (
+  spreadsheetId: string = DEFAULT_SPREADSHEET_ID,
+  accessToken?: string | null
+): Promise<string> => {
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+  const targetTab = 'List';
+
+  // 1. If accessToken is provided, try direct Sheets API first
+  if (accessToken) {
+    try {
+      const range = `'${targetTab}'!E2`;
+      const res = await fetch(
+        `${SHEETS_API_BASE}/${cleanId}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rawValues: string[][] = data.values || [];
+        const name = String(rawValues[0]?.[0] || '').trim();
+        if (name) {
+          localStorage.setItem('sheet_business_name', name);
+          return name;
+        }
+      }
+    } catch (e) {
+      console.warn('OAuth direct fetch of List sheet E2 failed, trying gviz:', e);
+    }
+  }
+
+  // 2. Fetch via gviz endpoint
+  const gvizUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&_t=${Date.now()}`;
+  try {
+    const res = await fetch(gvizUrl, { cache: 'no-store' });
+    if (res.ok) {
+      const text = await res.text();
+      const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
+        if (data.table && data.table.rows && Array.isArray(data.table.rows)) {
+          // Row 2 in Google Sheet is index 1 in data.table.rows
+          // Column E is index 4 (A=0, B=1, C=2, D=3, E=4)
+          const row1 = data.table.rows[1];
+          const cellVal =
+            row1?.c?.[4]?.v !== null && row1?.c?.[4]?.v !== undefined
+              ? String(row1?.c?.[4]?.v).trim()
+              : row1?.c?.[4]?.f
+              ? String(row1?.c?.[4]?.f).trim()
+              : '';
+          if (cellVal) {
+            localStorage.setItem('sheet_business_name', cellVal);
+            return cellVal;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch List sheet E2 via gviz:', err);
+  }
+
+  return getStoredBusinessName();
+};
+
+/**
+ * Retrieve saved business name from local storage or return fallback
+ */
+export const getStoredBusinessName = (): string => {
+  try {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('sheet_business_name') : null;
+    if (saved && saved.trim()) {
+      return saved.trim();
+    }
+  } catch (e) {}
+
+  return 'মাই ব্যবসা';
+};
+
+/**
  * The 8 standard order sources configured in Google Sheet (Sheet1 & Sheet2)
  */
 export const DEFAULT_SHEET_SOURCES: string[] = [

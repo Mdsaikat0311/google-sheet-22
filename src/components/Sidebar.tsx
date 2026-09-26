@@ -14,6 +14,7 @@ import { User } from 'firebase/auth';
 export type MainTabType = 'home' | 'orders' | 'steadfast' | 'reports' | 'sheet';
 
 interface SidebarProps {
+  businessName?: string;
   activeTab: MainTabType;
   setActiveTab: (tab: MainTabType) => void;
   user: User | null;
@@ -28,6 +29,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  businessName,
   activeTab,
   setActiveTab,
   user,
@@ -106,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div>
             <h1 className="font-bold text-lg text-white tracking-tight flex items-center gap-1.5">
-              মাই ব্যবসা <span className="text-xs px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-400 border border-pink-500/30">PRO</span>
+              {businessName || 'মাই ব্যবসা'} <span className="text-xs px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-400 border border-pink-500/30">PRO</span>
             </h1>
             <p className="text-xs text-gray-400">অর্ডার ও কুরিয়ার ড্যাশবোর্ড</p>
           </div>

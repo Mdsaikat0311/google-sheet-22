@@ -31,6 +31,7 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   TrendingUp,
   RefreshCw,
   Layers,
@@ -58,58 +59,63 @@ import { parseAnyDateToTimestamp } from '../utils/dateGrouping';
 
 /**
  * Accurately categorizes an order based on Sheet2 Column L (Courier Status) & Column J (Status)
- * Canonical statuses:
- * 1. 'delivery': ONLY when status or courierStatus explicitly contains 'delivered' / 'delivery' / 'ডেলিভার্ড' (NEVER 'complete')
+ * Canonical statuses strictly matching user requirements:
+ * Only updates for:
+ * 1. 'delivery': 'delivered' / 'delivery' / 'ডেলিভার্ড' (never 'complete')
  * 2. 'cancel': 'cancelled' / 'cancel' / 'বাতিল' / 'ক্যান্সেল'
  * 3. 'partial': 'partial_delivered' / 'partial' / 'আংশিক'
- * 4. 'pending': 'pending' / 'in_review' / 'processing' / 'hold' / empty / no status
+ * 4. 'pending': 'pending' / 'পেন্ডিং'
  *
- * Ensures strictly mutually exclusive categorization so order counts NEVER have mistakes.
+ * Orders with empty status, missing status, or any other status return 'none',
+ * ensuring they are NEVER counted into any of the 4 boxes (Delivery, Pending, Partial, Cancel).
  */
 export const getColumnLCourierStatus = (
   courierStatus?: string | null,
   orderStatus?: string | null
-): 'delivery' | 'pending' | 'partial' | 'cancel' => {
+): 'delivery' | 'pending' | 'partial' | 'cancel' | 'none' => {
   const c = String(courierStatus || '').toLowerCase().trim();
   const cNorm = c.replace(/[\s\-_]/g, '');
   const s = String(orderStatus || '').toLowerCase().trim();
   const sNorm = s.replace(/[\s\-_]/g, '');
 
-  // 1. Cancel: if either Column L (courier) or Column J (status) is cancelled
+  // 1. Cancel: 'cancelled', 'cancel', 'বাতিল', 'ক্যান্সেল'
   if (
+    cNorm === 'cancelled' ||
+    cNorm === 'cancel' ||
     cNorm.includes('cancel') ||
-    c === 'cancelled' ||
     c.includes('বাতিল') ||
     c.includes('ক্যান্সেল') ||
-    sNorm.includes('cancel') ||
-    s === 'cancelled' ||
-    s.includes('বাতিল') ||
-    s.includes('ক্যান্সেল')
+    (!cNorm && (sNorm === 'cancelled' || sNorm === 'cancel' || sNorm.includes('cancel') || s.includes('বাতিল') || s.includes('ক্যান্সেল')))
   ) {
     return 'cancel';
   }
 
-  // 2. Partial Delivery: if partial delivery
+  // 2. Partial Delivery: 'partial_delivered', 'partial', 'আংশিক'
   if (
     cNorm.includes('partial') ||
     c.includes('partial_delivered') ||
     c.includes('আংশিক') ||
-    sNorm.includes('partial') ||
-    s.includes('আংশিক')
+    (!cNorm && (sNorm.includes('partial') || s.includes('partial_delivered') || s.includes('আংশিক')))
   ) {
     return 'partial';
   }
 
-  // 3. Delivered: ONLY if status or courierStatus explicitly contains 'delivered' / 'delivery' / 'ডেলিভার্ড'
-  // Crucial requirement: "Complete" is NOT "Delivered". Only explicit delivered status is counted!
+  // 3. Delivered: ONLY explicit 'delivered' / 'delivery' / 'ডেলিভার্ড' (NEVER 'complete')
   const isDelivC = (cNorm.includes('deliver') && !cNorm.includes('partial')) || c === 'delivered' || c.includes('ডেলিভার্ড');
   const isDelivS = (sNorm.includes('deliver') && !sNorm.includes('partial')) || s === 'delivered' || s.includes('ডেলিভার্ড');
-  if (isDelivC || isDelivS) {
+  if (isDelivC || (!cNorm && isDelivS)) {
     return 'delivery';
   }
 
-  // 4. Default: If not delivered, not cancelled, and not partial -> it is Pending / In Review / Processing / Empty
-  return 'pending';
+  // 4. Pending: ONLY explicit 'pending' / 'পেন্ডিং'
+  const isPendingC = cNorm === 'pending' || c.includes('pending') || c.includes('পেন্ডিং');
+  const isPendingS = sNorm === 'pending' || s.includes('pending') || s.includes('পেন্ডিং');
+  if (isPendingC || (!cNorm && isPendingS)) {
+    return 'pending';
+  }
+
+  // 5. Default: If empty, missing, in_review, or any other status -> 'none' (never show in any of the 4 boxes!)
+  return 'none';
 };
 
 interface ReportsViewProps {
@@ -140,6 +146,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [isDateMenuOpen, setIsDateMenuOpen] = useState(false);
+  const [dateMenuTab, setDateMenuTab] = useState<'presets' | 'calendar'>('presets');
+  const [calViewYear, setCalViewYear] = useState<number>(() => new Date().getFullYear());
+  const [calViewMonth, setCalViewMonth] = useState<number>(() => new Date().getMonth());
 
   // Load Sheet 1 Report Data (supports background real-time sync)
   const loadSheet1Data = async (isManual: boolean = false, isBackground: boolean = false) => {
@@ -281,7 +290,22 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       return true;
     }
 
-    return cleanDateStr === dateFilter || cleanDate === dateFilter;
+    // Direct match with specific sheet date string
+    if (cleanDateStr === dateFilter || cleanDate === dateFilter) return true;
+
+    // Calendar selected date matching (e.g. YYYY-MM-DD or standard Date match)
+    const { dateObj: filterDateObj } = parseAnyDateToTimestamp(dateFilter);
+    if (filterDateObj && !isNaN(filterDateObj.getTime()) && orderDate) {
+      if (
+        orderDate.getFullYear() === filterDateObj.getFullYear() &&
+        orderDate.getMonth() === filterDateObj.getMonth() &&
+        orderDate.getDate() === filterDateObj.getDate()
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   };
 
   // Filtered orders matching selected date
@@ -290,10 +314,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return orders.filter((o) => matchesDate(o.date, o.rawDate));
   }, [orders, dateFilter, customStartDate, customEndDate, availableDates]);
 
-  // Order status helper functions strictly powered by Column L
+  // Order status helper functions strictly powered by Column L & Column J
   const isConfirmed = (_status?: string, courierStatus?: string) => {
+    const s = String(_status || '').toLowerCase().trim();
+    const isJComplete = s.includes('complete') || s.includes('comp') || s.includes('কমপ্লিট');
+    // If Column J is Complete, it ALWAYS stays in Confirm regardless of courier status changes
+    if (isJComplete) return true;
+
     const colL = getColumnLCourierStatus(courierStatus, _status);
-    return colL !== 'cancel';
+    return colL === 'delivery' || colL === 'pending' || colL === 'partial';
   };
 
   const isDelivered = (_status?: string, courierStatus?: string) => {
@@ -399,30 +428,46 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     }
 
     const totalLead = sourceOrders.length;
+    let totalConfirm = 0;
     let totalDelivery = 0;
     let totalPending = 0;
     let totalPartial = 0;
     let totalCancel = 0;
+    let totalCompleted = 0;
     let totalQuantity = 0;
     let totalAmount = 0;
 
     sourceOrders.forEach((o) => {
+      const confirmed = isConfirmed(o.status, o.courierStatus);
+      if (confirmed) {
+        totalConfirm++;
+      }
+
       const colL = getColumnLCourierStatus(o.courierStatus, o.status);
       if (colL === 'delivery') totalDelivery++;
       else if (colL === 'pending') totalPending++;
       else if (colL === 'partial') totalPartial++;
       else if (colL === 'cancel') totalCancel++;
 
+      // User criteria: delivered, partial_delivered, cancelled are complete
+      // pending & in_review are not complete
+      const isCompletedStatus = colL === 'delivery' || colL === 'partial' || colL === 'cancel';
+      if (confirmed && isCompletedStatus) {
+        totalCompleted++;
+      }
+
       totalQuantity += o.quantity || 1;
       totalAmount += o.amount || o.total || 0;
     });
 
-    const totalConfirm = totalDelivery + totalPending + totalPartial;
+    const completeRate = totalConfirm > 0 ? `${((totalCompleted / totalConfirm) * 100).toFixed(1)}%` : '0.0%';
 
     return {
       totalLead,
       totalConfirm,
       confirmRate: totalLead > 0 ? `${((totalConfirm / totalLead) * 100).toFixed(1)}%` : '0.0%',
+      totalCompleted,
+      completeRate,
       totalDelivery,
       deliveryRate: totalConfirm > 0 ? `${((totalDelivery / totalConfirm) * 100).toFixed(1)}%` : '0.0%',
       totalPending,
@@ -596,6 +641,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       lead: 0,
       confirm: 0,
       confirmRate: '0.0%',
+      completeRate: '0.0%',
       delivery: 0,
       deliveryRate: '0.0%',
       pending: 0,
@@ -610,30 +656,43 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
     const targetOrders = dateFilter !== 'all' ? relatedDateOrders : allRelatedOrders;
     const lead = targetOrders.length;
+    let confirm = 0;
     let delivery = 0;
     let pending = 0;
     let partial = 0;
     let cancel = 0;
+    let completed = 0;
     let quantity = 0;
     let amount = 0;
 
     targetOrders.forEach((o) => {
+      const confirmed = isConfirmed(o.status, o.courierStatus);
+      if (confirmed) {
+        confirm++;
+      }
+
       const colL = getColumnLCourierStatus(o.courierStatus, o.status);
       if (colL === 'delivery') delivery++;
       else if (colL === 'pending') pending++;
       else if (colL === 'partial') partial++;
       else if (colL === 'cancel') cancel++;
 
+      const isCompletedStatus = colL === 'delivery' || colL === 'partial' || colL === 'cancel';
+      if (confirmed && isCompletedStatus) {
+        completed++;
+      }
+
       quantity += o.quantity || 1;
       amount += o.amount || o.total || 0;
     });
 
-    const confirm = delivery + pending + partial;
+    const completeRate = confirm > 0 ? `${((completed / confirm) * 100).toFixed(1)}%` : '0.0%';
 
     prodStats = {
       lead,
       confirm,
       confirmRate: lead > 0 ? `${((confirm / lead) * 100).toFixed(1)}%` : '0.0%',
+      completeRate,
       delivery,
       deliveryRate: confirm > 0 ? `${((delivery / confirm) * 100).toFixed(1)}%` : '0.0%',
       pending,
@@ -756,6 +815,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         id: prod.id,
         name: prod.productName,
         orderCount,
+        completeRate: cleanRate(prodStats.completeRate || '0.0%'),
       };
     });
 
@@ -801,6 +861,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       if (customEndDate) return `${customEndDate} পর্যন্ত`;
       return 'কাস্টম তারিখ সীমা';
     }
+    const { dateObj: dtObj } = parseAnyDateToTimestamp(dateFilter);
+    if (dtObj && !isNaN(dtObj.getTime())) {
+      const formatted = `${String(dtObj.getDate()).padStart(2, '0')}/${String(dtObj.getMonth() + 1).padStart(2, '0')}/${dtObj.getFullYear()}`;
+      return `তারিখ: ${formatted}`;
+    }
     return `তারিখ: ${dateFilter}`;
   };
 
@@ -840,164 +905,337 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-[#161a26] border border-[#273046] rounded-2xl shadow-2xl p-2.5 z-40 animate-fadeIn space-y-2">
                   <div className="px-2 py-1 text-[11px] font-bold text-gray-400 uppercase tracking-wider border-b border-[#20273a] flex items-center justify-between">
                     <span>তারিখ নির্বাচন করুন (Date Filter)</span>
-                    <span className="text-[10px] text-pink-400 font-mono">লাইভ ডাটা</span>
-                  </div>
-
-                  {/* Preset Options requested: ALL TIME, TODAY, YESTERDAY, LAST 7 DAYS, LAST 30 DAYS, LAST MONTH */}
-                  <div className="grid grid-cols-2 gap-1">
                     <button
-                      onClick={() => {
-                        setDateFilter('all');
-                        setIsDateMenuOpen(false);
-                      }}
-                      className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        dateFilter === 'all'
-                          ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
-                          : 'text-gray-300 hover:bg-[#20273a]'
+                      type="button"
+                      onClick={() => setDateMenuTab(dateMenuTab === 'calendar' ? 'presets' : 'calendar')}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all active:scale-95 shadow-sm ${
+                        dateMenuTab === 'calendar'
+                          ? 'bg-pink-600 text-white border-pink-500 shadow-pink-600/30'
+                          : 'bg-pink-500/15 hover:bg-pink-500/25 border-pink-500/40 text-pink-300 hover:text-white'
                       }`}
+                      title={dateMenuTab === 'calendar' ? 'প্রিসেট অপশন দেখুন' : 'ক্যালেন্ডার ভিউ খুলুন'}
                     >
-                      <span>সব সময় (All Time)</span>
-                      <span className="text-[10px] text-gray-500 font-mono">{orders.length}</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setDateFilter('today');
-                        setIsDateMenuOpen(false);
-                      }}
-                      className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        dateFilter === 'today'
-                          ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
-                          : 'text-gray-300 hover:bg-[#20273a]'
-                      }`}
-                    >
-                      <span>আজ (Today)</span>
-                      <span className="text-[10px] text-emerald-400 font-mono">●</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setDateFilter('yesterday');
-                        setIsDateMenuOpen(false);
-                      }}
-                      className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        dateFilter === 'yesterday'
-                          ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
-                          : 'text-gray-300 hover:bg-[#20273a]'
-                      }`}
-                    >
-                      <span>গতকাল (Yesterday)</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setDateFilter('last7days');
-                        setIsDateMenuOpen(false);
-                      }}
-                      className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        dateFilter === 'last7days'
-                          ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
-                          : 'text-gray-300 hover:bg-[#20273a]'
-                      }`}
-                    >
-                      <span>গত ৭ দিন (7 Days)</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setDateFilter('last30days');
-                        setIsDateMenuOpen(false);
-                      }}
-                      className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        dateFilter === 'last30days'
-                          ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
-                          : 'text-gray-300 hover:bg-[#20273a]'
-                      }`}
-                    >
-                      <span>গত ৩০ দিন (30 Days)</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setDateFilter('lastmonth');
-                        setIsDateMenuOpen(false);
-                      }}
-                      className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        dateFilter === 'lastmonth'
-                          ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
-                          : 'text-gray-300 hover:bg-[#20273a]'
-                      }`}
-                    >
-                      <span>গত মাস (Last Month)</span>
+                      <Calendar className="w-3.5 h-3.5 text-pink-400" />
+                      <span>{dateMenuTab === 'calendar' ? 'প্রিসেট অপশন' : 'ক্যালেন্ডার'}</span>
                     </button>
                   </div>
 
-                  {/* Manually Select Date from Date to Date (কাস্টম তারিখ সীমা) */}
-                  <div className="px-2 pt-2 border-t border-[#20273a] space-y-2">
-                    <label className="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">
-                      তারিখ থেকে তারিখ (Date Range):
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <span className="text-[9px] text-gray-400 block mb-0.5">শুরু (From):</span>
-                        <input
-                          type="date"
-                          value={customStartDate}
-                          onChange={(e) => setCustomStartDate(e.target.value)}
-                          className="w-full bg-[#10131c] border border-[#273046] rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-pink-500"
-                        />
-                      </div>
-                      <div>
-                        <span className="text-[9px] text-gray-400 block mb-0.5">শেষ (To):</span>
-                        <input
-                          type="date"
-                          value={customEndDate}
-                          onChange={(e) => setCustomEndDate(e.target.value)}
-                          className="w-full bg-[#10131c] border border-[#273046] rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-pink-500"
-                        />
-                      </div>
-                    </div>
+                  {/* Tab Selector: Presets vs Visual Calendar */}
+                  <div className="flex items-center p-0.5 bg-[#10131c] border border-[#20273a] rounded-xl text-xs font-semibold">
                     <button
-                      onClick={() => {
-                        if (customStartDate || customEndDate) {
-                          setDateFilter('custom');
-                          setIsDateMenuOpen(false);
-                        }
-                      }}
-                      disabled={!customStartDate && !customEndDate}
-                      className="w-full py-1.5 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all shadow"
+                      type="button"
+                      onClick={() => setDateMenuTab('presets')}
+                      className={`flex-1 py-1.5 rounded-lg transition-all text-center ${
+                        dateMenuTab === 'presets'
+                          ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow font-bold'
+                          : 'text-gray-400 hover:text-white'
+                      }`}
                     >
-                      ফিল্টার প্রয়োগ করুন
+                      প্রিসেট ফিল্টার
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDateMenuTab('calendar')}
+                      className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all text-center ${
+                        dateMenuTab === 'calendar'
+                          ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow font-bold'
+                          : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      <Calendar className="w-3.5 h-3.5 text-pink-400" />
+                      ক্যালেন্ডার ভিউ
                     </button>
                   </div>
 
-                  {/* Dates From Sheet */}
-                  {availableDates.length > 0 && (
-                    <div className="pt-1.5 border-t border-[#20273a]">
-                      <div className="px-2 py-0.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
-                        শীট থেকে নির্দিষ্ট তারিখ:
+                  {dateMenuTab === 'calendar' ? (
+                    /* Visual Interactive Month Calendar */
+                    <div className="space-y-2 pt-1">
+                      {/* Month & Year Navigation */}
+                      <div className="flex items-center justify-between px-1 bg-[#10131c] p-1.5 rounded-xl border border-[#20273a]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (calViewMonth === 0) {
+                              setCalViewMonth(11);
+                              setCalViewYear((prev) => prev - 1);
+                            } else {
+                              setCalViewMonth((prev) => prev - 1);
+                            }
+                          }}
+                          className="p-1 rounded-lg bg-[#161a26] hover:bg-[#20273a] text-gray-300 hover:text-white border border-[#273046] transition-colors"
+                          title="পূর্ববর্তী মাস"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+
+                        <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-pink-400" />
+                          <span>
+                            {[
+                              'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন',
+                              'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+                            ][calViewMonth]}
+                          </span>
+                          <span className="text-pink-400 font-mono">{calViewYear}</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (calViewMonth === 11) {
+                              setCalViewMonth(0);
+                              setCalViewYear((prev) => prev + 1);
+                            } else {
+                              setCalViewMonth((prev) => prev + 1);
+                            }
+                          }}
+                          className="p-1 rounded-lg bg-[#161a26] hover:bg-[#20273a] text-gray-300 hover:text-white border border-[#273046] transition-colors"
+                          title="পরবর্তী মাস"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
                       </div>
-                      <div className="max-h-28 overflow-y-auto space-y-0.5 mt-1 pr-1">
-                        {availableDates.map((dt, dtIdx) => {
-                          const count = orders.filter((o) => o.date?.trim() === dt).length;
+
+                      {/* Weekday headers */}
+                      <div className="grid grid-cols-7 gap-1 text-center">
+                        {['রবি', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহঃ', 'শুক্র', 'শনি'].map((d, i) => (
+                          <span key={i} className="text-[10px] font-bold text-gray-400 py-0.5">
+                            {d}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Days grid */}
+                      <div className="grid grid-cols-7 gap-1">
+                        {/* Blank padding cells */}
+                        {Array.from({ length: new Date(calViewYear, calViewMonth, 1).getDay() }).map((_, i) => (
+                          <div key={`blank-${i}`} className="h-8" />
+                        ))}
+
+                        {/* Day buttons */}
+                        {Array.from({ length: new Date(calViewYear, calViewMonth + 1, 0).getDate() }).map((_, i) => {
+                          const day = i + 1;
+                          const formattedDate = `${calViewYear}-${String(calViewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                          const now = new Date();
+                          const isToday =
+                            now.getFullYear() === calViewYear &&
+                            now.getMonth() === calViewMonth &&
+                            now.getDate() === day;
+                          const isSelected = dateFilter === formattedDate;
+
+                          // Count orders for this date
+                          const dayOrdersCount = orders.filter((o) => {
+                            const raw = o.rawDate || o.date;
+                            if (!raw) return false;
+                            const { dateObj } = parseAnyDateToTimestamp(raw);
+                            return (
+                              dateObj &&
+                              dateObj.getFullYear() === calViewYear &&
+                              dateObj.getMonth() === calViewMonth &&
+                              dateObj.getDate() === day
+                            );
+                          }).length;
+
                           return (
                             <button
-                              key={`dt-${dt}-${dtIdx}`}
+                              key={`day-${day}`}
+                              type="button"
                               onClick={() => {
-                                setDateFilter(dt);
+                                setDateFilter(formattedDate);
                                 setIsDateMenuOpen(false);
                               }}
-                              className={`w-full text-left px-2 py-1 rounded-lg text-xs flex items-center justify-between hover:bg-[#20273a] transition-colors ${
-                                dateFilter === dt ? 'text-pink-400 font-bold bg-pink-500/10' : 'text-gray-300'
+                              className={`h-8 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all relative group ${
+                                isSelected
+                                  ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-md shadow-pink-500/30 font-bold border border-pink-400'
+                                  : isToday
+                                  ? 'bg-pink-500/20 text-pink-300 border border-pink-500/40 hover:bg-pink-500/30'
+                                  : 'bg-[#141824] text-gray-300 hover:bg-[#20273a] hover:text-white border border-[#20273a]'
                               }`}
+                              title={`${day} ${[
+                                'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন',
+                                'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+                              ][calViewMonth]} ${calViewYear}${dayOrdersCount > 0 ? ` (${dayOrdersCount} টি অর্ডার)` : ''}`}
                             >
-                              <span>{dt}</span>
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#1e2434] text-purple-300 font-mono">
-                                {count} টি
-                              </span>
+                              <span>{day}</span>
+                              {dayOrdersCount > 0 && (
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full -mt-0.5 ${
+                                    isSelected ? 'bg-white' : 'bg-emerald-400'
+                                  }`}
+                                />
+                              )}
                             </button>
                           );
                         })}
+                      </div>
+
+                      {/* Footer: Quick today button & Legend */}
+                      <div className="pt-2 border-t border-[#20273a] space-y-2">
+                        <div className="flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const today = new Date();
+                              const formattedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                              setDateFilter(formattedDate);
+                              setIsDateMenuOpen(false);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-pink-500/10 hover:bg-pink-500/20 border border-pink-500/30 text-pink-300 text-[11px] font-bold transition-all"
+                          >
+                            আজকের তারিখ
+                          </button>
+                          <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                            <span>সবুজ ডট = অর্ডার রয়েছে</span>
+                          </div>
+                        </div>
+
+                        {/* Direct input for manual choice */}
+                        <div className="flex items-center gap-2 bg-[#10131c] border border-[#273046] rounded-lg px-2 py-1">
+                          <span className="text-[10px] text-gray-400 whitespace-nowrap">ম্যানুয়াল তারিখ:</span>
+                          <input
+                            type="date"
+                            value={dateFilter.match(/^\d{4}-\d{2}-\d{2}$/) ? dateFilter : ''}
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                setDateFilter(e.target.value);
+                                setIsDateMenuOpen(false);
+                              }
+                            }}
+                            className="w-full bg-transparent text-white text-[11px] focus:outline-none cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Presets & Custom Range */
+                    <div className="space-y-2 pt-1">
+                      {/* Preset Options requested: ALL TIME, TODAY, YESTERDAY, LAST 7 DAYS, LAST 30 DAYS, LAST MONTH */}
+                      <div className="grid grid-cols-2 gap-1">
+                        <button
+                          onClick={() => {
+                            setDateFilter('all');
+                            setIsDateMenuOpen(false);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
+                            dateFilter === 'all'
+                              ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
+                              : 'text-gray-300 hover:bg-[#20273a]'
+                          }`}
+                        >
+                          <span>সব সময় (All Time)</span>
+                          <span className="text-[10px] text-gray-500 font-mono">{orders.length}</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDateFilter('today');
+                            setIsDateMenuOpen(false);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
+                            dateFilter === 'today'
+                              ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
+                              : 'text-gray-300 hover:bg-[#20273a]'
+                          }`}
+                        >
+                          <span>আজ (Today)</span>
+                          <span className="text-[10px] text-emerald-400 font-mono">●</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDateFilter('yesterday');
+                            setIsDateMenuOpen(false);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
+                            dateFilter === 'yesterday'
+                              ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
+                              : 'text-gray-300 hover:bg-[#20273a]'
+                          }`}
+                        >
+                          <span>গতকাল (Yesterday)</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDateFilter('last7days');
+                            setIsDateMenuOpen(false);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
+                            dateFilter === 'last7days'
+                              ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
+                              : 'text-gray-300 hover:bg-[#20273a]'
+                          }`}
+                        >
+                          <span>গত ৭ দিন (7 Days)</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDateFilter('last30days');
+                            setIsDateMenuOpen(false);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
+                            dateFilter === 'last30days'
+                              ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
+                              : 'text-gray-300 hover:bg-[#20273a]'
+                          }`}
+                        >
+                          <span>গত ৩০ দিন (30 Days)</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDateFilter('lastmonth');
+                            setIsDateMenuOpen(false);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-all ${
+                            dateFilter === 'lastmonth'
+                              ? 'bg-pink-600/20 text-pink-400 font-bold border border-pink-500/30'
+                              : 'text-gray-300 hover:bg-[#20273a]'
+                          }`}
+                        >
+                          <span>গত মাস (Last Month)</span>
+                        </button>
+                      </div>
+
+                      {/* Manually Select Date from Date to Date (কাস্টম তারিখ সীমা) */}
+                      <div className="px-2 pt-2 border-t border-[#20273a] space-y-2">
+                        <label className="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">
+                          তারিখ থেকে তারিখ (Date Range):
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-[9px] text-gray-400 block mb-0.5">শুরু (From):</span>
+                            <input
+                              type="date"
+                              value={customStartDate}
+                              onChange={(e) => setCustomStartDate(e.target.value)}
+                              className="w-full bg-[#10131c] border border-[#273046] rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-pink-500 cursor-pointer"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-[9px] text-gray-400 block mb-0.5">শেষ (To):</span>
+                            <input
+                              type="date"
+                              value={customEndDate}
+                              onChange={(e) => setCustomEndDate(e.target.value)}
+                              className="w-full bg-[#10131c] border border-[#273046] rounded-lg px-2 py-1 text-[11px] text-white focus:outline-none focus:border-pink-500 cursor-pointer"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            if (customStartDate || customEndDate) {
+                              setDateFilter('custom');
+                              setIsDateMenuOpen(false);
+                            }
+                          }}
+                          disabled={!customStartDate && !customEndDate}
+                          className="w-full py-1.5 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all shadow"
+                        >
+                          ফিল্টার প্রয়োগ করুন
+                        </button>
                       </div>
                     </div>
                   )}
@@ -1014,20 +1252,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             <span className="text-xs font-bold text-gray-300 uppercase tracking-wide">
               📊 পারফরম্যান্স সামারি ডাটা বক্স ({getDateFilterLabel()})
             </span>
-            {dateFilter !== 'all' && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/30">
-                ফিল্টার সক্রিয়
-              </span>
-            )}
           </div>
-          {dateFilter !== 'all' && (
-            <button
-              onClick={() => setDateFilter('all')}
-              className="text-xs text-pink-400 hover:text-pink-300 underline font-medium"
-            >
-              সব তারিখের ডাটা দেখুন
-            </button>
-          )}
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
@@ -1047,7 +1272,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 {aggregatedStats.totalConfirm} <span className="text-xs font-semibold text-gray-400">টি</span>
               </div>
               <div className="text-[11px] text-gray-400 mt-1 truncate">
-                রেট: <strong className="text-pink-300">{cleanRate(aggregatedStats.confirmRate)}</strong>
+                কমপ্লিট রেট: <strong className="text-pink-300">{cleanRate(aggregatedStats.completeRate)}</strong>
               </div>
             </div>
           </div>
@@ -1272,7 +1497,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                     <div className="bg-[#141824] border border-[#20283c] rounded-lg py-1 px-1.5 text-center flex flex-col justify-center min-h-[42px]">
                       <span className="text-[10px] text-gray-400 font-medium block truncate">Confirm</span>
                       <span className="text-xs sm:text-[13px] font-bold text-pink-400 mt-0.5 font-mono whitespace-nowrap">
-                        {prodStats.confirm} <span className="text-[10px] font-normal text-pink-300/80">({cleanRate(prodStats.confirmRate)})</span>
+                        {prodStats.confirm} <span className="text-[10px] font-normal text-pink-300/80">({cleanRate(prodStats.completeRate || prodStats.confirmRate)})</span>
                       </span>
                     </div>
 
@@ -1485,9 +1710,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                           <div className="w-6 h-6 rounded-md bg-gradient-to-br from-pink-600/20 to-purple-600/20 border border-pink-500/30 flex items-center justify-center text-pink-400 font-bold text-[10px] shrink-0">
                             {item.name.slice(0, 2).toUpperCase()}
                           </div>
-                          <span className="text-xs font-bold text-white group-hover:text-pink-300 transition-colors truncate" title={item.name}>
-                            {item.name}
-                          </span>
+                          <div className="min-w-0 flex items-center gap-1.5 truncate">
+                            <span className="text-xs font-bold text-white group-hover:text-pink-300 transition-colors truncate" title={item.name}>
+                              {item.name}
+                            </span>
+                            <span className="text-[11px] font-bold text-pink-400 font-mono shrink-0" title={`কমপ্লিট রেট: ${item.completeRate}`}>
+                              ({item.completeRate})
+                            </span>
+                          </div>
                         </div>
                         <span className="text-[11px] font-bold text-pink-400 font-mono px-2 py-0.5 rounded-md bg-pink-500/10 border border-pink-500/20 shrink-0">
                           {item.percentage}
@@ -1684,7 +1914,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         <div className="bg-[#141824] border border-[#20283c] group-hover:border-pink-500/30 rounded-lg py-1 px-1.5 text-center flex flex-col justify-center transition-all min-h-[42px]">
                           <span className="text-[10px] text-gray-400 font-medium block truncate">Confirm</span>
                           <span className="text-xs sm:text-[13px] font-bold text-pink-400 mt-0.5 font-mono whitespace-nowrap">
-                            {prodStats.confirm} <span className="text-[10px] font-normal text-pink-300/80">({cleanRate(prodStats.confirmRate)})</span>
+                            {prodStats.confirm} <span className="text-[10px] font-normal text-pink-300/80">({cleanRate(prodStats.completeRate || prodStats.confirmRate)})</span>
                           </span>
                         </div>
 

@@ -44,6 +44,8 @@ import {
   appendSheet3Entry,
   fetchSheet4ProfitData,
   fetchListSheetProductNames,
+  fetchListSheetBusinessName,
+  getStoredBusinessName,
   fetchSheetSources,
   getStoredSheetSources,
   DEFAULT_SHEET_SOURCES,
@@ -340,6 +342,26 @@ export default function App() {
     }
   };
 
+  // Real-time Business Name from List Sheet Cell E2
+  const [businessName, setBusinessName] = useState<string>(() => {
+    return getStoredBusinessName();
+  });
+
+  const loadBusinessNameLive = async (
+    targetSpreadsheetId: string = spreadsheetId,
+    token: string | null = accessToken
+  ) => {
+    try {
+      const cleanId = extractSpreadsheetId(targetSpreadsheetId);
+      const name = await fetchListSheetBusinessName(cleanId, token);
+      if (name) {
+        setBusinessName(name);
+      }
+    } catch (err) {
+      console.warn('Failed to live-load List sheet business name:', err);
+    }
+  };
+
   // Modals state
   const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
   const [selectedOrderForView, setSelectedOrderForView] = useState<Order | null>(null);
@@ -516,12 +538,14 @@ export default function App() {
   // Real-time listener for Sheet 3, Sheet 4, List Sheet & Orders (Polling every 15s + Window Focus + Tab Visibility refresh)
   useEffect(() => {
     loadListNamesLive(spreadsheetId, accessToken);
+    loadBusinessNameLive(spreadsheetId, accessToken);
     loadSourcesLive(spreadsheetId, accessToken);
     loadSheet3StockLive(spreadsheetId);
     loadSheet4DataLive(spreadsheetId, accessToken);
     syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
     const interval = setInterval(() => {
       loadListNamesLive(spreadsheetId, accessToken);
+      loadBusinessNameLive(spreadsheetId, accessToken);
       loadSourcesLive(spreadsheetId, accessToken);
       loadSheet3StockLive(spreadsheetId);
       loadSheet4DataLive(spreadsheetId, accessToken);
@@ -530,6 +554,7 @@ export default function App() {
 
     const onFocus = () => {
       loadListNamesLive(spreadsheetId, accessToken);
+      loadBusinessNameLive(spreadsheetId, accessToken);
       loadSourcesLive(spreadsheetId, accessToken);
       loadSheet3StockLive(spreadsheetId);
       loadSheet4DataLive(spreadsheetId, accessToken);
@@ -538,6 +563,7 @@ export default function App() {
     const onVisibilityChange = () => {
       if (!document.hidden) {
         loadListNamesLive(spreadsheetId, accessToken);
+        loadBusinessNameLive(spreadsheetId, accessToken);
         loadSourcesLive(spreadsheetId, accessToken);
         loadSheet3StockLive(spreadsheetId);
         loadSheet4DataLive(spreadsheetId, accessToken);
@@ -587,6 +613,7 @@ export default function App() {
     try {
       const cleanId = extractSpreadsheetId(targetSpreadsheetId);
       loadListNamesLive(cleanId, targetToken || undefined);
+      loadBusinessNameLive(cleanId, targetToken || undefined);
       loadSourcesLive(cleanId, targetToken || undefined);
       const sheetResult = await getSheetOrders(cleanId, targetToken || undefined, targetTab);
 
@@ -1677,6 +1704,7 @@ export default function App() {
     <div className="flex h-screen bg-[#0a0c13] text-gray-100 font-sans overflow-hidden">
       {/* Sidebar Navigation (Desktop + Mobile Drawer) */}
       <Sidebar
+        businessName={businessName}
         activeTab={activeTab}
         setActiveTab={(tab) => {
           if (tab === 'sheet') {
@@ -1710,11 +1738,11 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-pink-600 to-rose-600 flex items-center justify-center text-white font-bold text-sm shadow-md shadow-pink-600/30">
-                ম
+                {(businessName || 'ম').charAt(0)}
               </div>
               <div>
                 <span className="font-bold text-sm text-white tracking-tight flex items-center gap-1">
-                  মাই ব্যবসা <span className="text-[10px] px-1 py-0.2 rounded bg-pink-500/20 text-pink-400">PRO</span>
+                  {businessName || 'মাই ব্যবসা'} <span className="text-[10px] px-1 py-0.2 rounded bg-pink-500/20 text-pink-400">PRO</span>
                 </span>
                 <p className="text-[10px] text-gray-400">ড্যাশবোর্ড</p>
               </div>
