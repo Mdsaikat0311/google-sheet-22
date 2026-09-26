@@ -1,6 +1,7 @@
 import { Product, Order, Sheet1ProductReport, ProductReportSource, Sheet3ProductEntry, Sheet4ProfitRow } from '../types';
+import appConfig from '../config/appConfig.json';
 
-export const DEFAULT_SPREADSHEET_ID = '11pI2WGa6yr70R0Sf9jrTDaKlds754qH8oqw-XWS9yZ8';
+export const DEFAULT_SPREADSHEET_ID = appConfig.spreadsheetId || '11pI2WGa6yr70R0Sf9jrTDaKlds754qH8oqw-XWS9yZ8';
 
 export const extractSpreadsheetId = (input: string): string => {
   const trimmed = input.trim();
@@ -1197,20 +1198,26 @@ export const verifyNewOrderInSheet = async (
   return { verified: false };
 };
 
-export const DEFAULT_APPS_SCRIPT_URL =
-  'https://script.google.com/macros/s/AKfycbz2d-zKPTuqpSndp2zw-vjlXyEDbFSK-bwbkBdyXfXlk8PwzNuhp5ytIzowXTHkP_smBw/exec';
+export const DEFAULT_APPS_SCRIPT_URL = appConfig.appsScriptUrl || 'https://script.google.com/macros/s/AKfycbz2d-zKPTuqpSndp2zw-vjlXyEDbFSK-bwbkBdyXfXlk8PwzNuhp5ytIzowXTHkP_smBw/exec';
 
 export const getAppsScriptUrl = (): string => {
   if (typeof window !== 'undefined') {
-    return localStorage.getItem('apps_script_url') || DEFAULT_APPS_SCRIPT_URL;
+    const saved = localStorage.getItem('apps_script_url');
+    if (saved && saved.trim()) return saved.trim();
   }
   return DEFAULT_APPS_SCRIPT_URL;
 };
 
 export const saveAppsScriptUrl = (url: string) => {
+  const clean = url.trim();
   if (typeof window !== 'undefined') {
-    localStorage.setItem('apps_script_url', url.trim());
+    localStorage.setItem('apps_script_url', clean);
   }
+  fetch('/api/save-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appsScriptUrl: clean }),
+  }).catch(() => {});
 };
 
 export const APPS_SCRIPT_URL = DEFAULT_APPS_SCRIPT_URL;

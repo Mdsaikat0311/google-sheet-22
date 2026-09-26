@@ -13,6 +13,7 @@ import {
   Truck,
 } from 'lucide-react';
 import { Order, OrderStatus, Product, CartItem, StockMovementLog, Sheet3ProductEntry, Sheet4ProfitRow } from './types';
+import appConfig from './config/appConfig.json';
 import { INITIAL_ORDERS } from './data/initialOrders';
 import { INITIAL_PRODUCTS } from './data/initialProducts';
 import {
@@ -193,15 +194,35 @@ export default function App() {
   // Spreadsheet ID
   const [spreadsheetId, setSpreadsheetId] = useState<string>(() => {
     const saved = localStorage.getItem('app_spreadsheet_id');
-    if (!saved || saved === '1aHUCGINJ8rB29rXXckH7uMTwrk163v6aQFTfQ6ptr6M') {
-      return DEFAULT_SPREADSHEET_ID;
+    if (saved && saved.trim()) {
+      return saved.trim();
     }
-    return saved;
+    return appConfig.spreadsheetId || DEFAULT_SPREADSHEET_ID;
   });
 
   useEffect(() => {
     localStorage.setItem('app_spreadsheet_id', spreadsheetId);
   }, [spreadsheetId]);
+
+  // Pull server-persisted config on load if available
+  useEffect(() => {
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg?.spreadsheetId && cfg.spreadsheetId.trim()) {
+          setSpreadsheetId(cfg.spreadsheetId.trim());
+          localStorage.setItem('app_spreadsheet_id', cfg.spreadsheetId.trim());
+        }
+        if (cfg?.appsScriptUrl && cfg.appsScriptUrl.trim()) {
+          localStorage.setItem('apps_script_url', cfg.appsScriptUrl.trim());
+        }
+        if (cfg?.orderSheetTab && cfg.orderSheetTab.trim()) {
+          setOrderSheetTab(cfg.orderSheetTab.trim());
+          localStorage.setItem('order_sheet_tab', cfg.orderSheetTab.trim());
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Syncing & Loading
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -1938,7 +1959,8 @@ export default function App() {
         onUpdateSpreadsheetId={(id) => {
           const cleanId = extractSpreadsheetId(id);
           setSpreadsheetId(cleanId);
-          showToast(`গুগল শিট আইডি আপডেট করা হয়েছে: ${cleanId.slice(0, 12)}...`);
+          localStorage.setItem('app_spreadsheet_id', cleanId);
+          showToast(`গুগল শিট আইডি কোডে স্থায়ীভাবে সেভ হয়েছে!`);
           syncWithSheet(cleanId, accessToken, orderSheetTab);
         }}
         selectedTab={orderSheetTab}

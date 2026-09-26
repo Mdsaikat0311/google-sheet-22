@@ -54,6 +54,80 @@ import {
 } from 'lucide-react';
 import { Order, Sheet1ProductReport, ProductReportSource } from '../types';
 import { fetchSheet1Reports, DEFAULT_SPREADSHEET_ID } from '../services/sheets';
+import { parseAnyDateToTimestamp } from '../utils/dateGrouping';
+
+/**
+ * Accurately categorizes an order based on Sheet2 Column L (Courier Status)
+ * Canonical Column L statuses:
+ * 1. 'delivery': delivered, deliv, ডেলিভার্ড
+ * 2. 'pending': in_review, inreview, pending, approval, পেন্ডিং
+ * 3. 'partial': partial_delivered, partial, আংশিক
+ * 4. 'cancel': cancelled, cancel, বাতিল, ক্যান্সেল
+ *
+ * Ensures strictly mutually exclusive categorization so order counts NEVER have mistakes.
+ */
+export const getColumnLCourierStatus = (
+  courierStatus?: string | null,
+  orderStatus?: string | null
+): 'delivery' | 'pending' | 'partial' | 'cancel' => {
+  const c = String(courierStatus || '').toLowerCase().trim();
+  const cNorm = c.replace(/[\s\-_]/g, '');
+
+  // 1. Column L: Cancel
+  if (
+    cNorm.includes('cancel') ||
+    c === 'cancelled' ||
+    c.includes('বাতিল') ||
+    c.includes('ক্যান্সেল')
+  ) {
+    return 'cancel';
+  }
+
+  // 2. Column L: Partial Delivery
+  if (
+    cNorm.includes('partial') ||
+    c.includes('partial_delivered') ||
+    c.includes('আংশিক')
+  ) {
+    return 'partial';
+  }
+
+  // 3. Column L: Delivered / Delivery
+  if (
+    (cNorm.includes('deliver') && !cNorm.includes('partial')) ||
+    c === 'delivered' ||
+    c.includes('ডেলিভার্ড')
+  ) {
+    return 'delivery';
+  }
+
+  // 4. Column L: In Review / Pending
+  if (
+    cNorm.includes('inreview') ||
+    cNorm.includes('inreiw') ||
+    cNorm.includes('review') ||
+    cNorm.includes('pending') ||
+    cNorm.includes('approval') ||
+    c.includes('পেন্ডিং')
+  ) {
+    return 'pending';
+  }
+
+  // Fallback to Column J ONLY if Column L is unassigned / empty / "no sellect":
+  const s = String(orderStatus || '').toLowerCase().trim();
+  if (s.includes('cancel') || s.includes('বাতিল') || s.includes('ক্যান্সেল')) {
+    return 'cancel';
+  }
+  if (s.includes('comp') || s.includes('deliv') || s.includes('ডেলিভার্ড')) {
+    return 'delivery';
+  }
+  if (s.includes('part') || s.includes('আংশিক')) {
+    return 'partial';
+  }
+
+  // Default to pending / processing
+  return 'pending';
+};
 
 interface ReportsViewProps {
   spreadsheetId?: string;
@@ -118,60 +192,47 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return () => clearInterval(interval);
   }, [spreadsheetId]);
 
-  // Extract all distinct dates from orders
+  // Extract all distinct dates from orders (using parseAnyDateToTimestamp for clean formatting)
   const availableDates = useMemo(() => {
     const set = new Set<string>();
     orders.forEach((o) => {
-      if (o.date && o.date.trim()) {
-        set.add(o.date.trim());
+      const raw = o.rawDate || o.date;
+      if (raw && raw.trim()) {
+        const { cleanDateStr } = parseAnyDateToTimestamp(raw);
+        if (cleanDateStr) {
+          set.add(cleanDateStr);
+        } else {
+          set.add(raw.trim());
+        }
       }
     });
-    return Array.from(set);
+    return Array.from(set).sort((a, b) => {
+      const { dateObj: da } = parseAnyDateToTimestamp(a);
+      const { dateObj: db } = parseAnyDateToTimestamp(b);
+      return (db?.getTime() || 0) - (da?.getTime() || 0);
+    });
   }, [orders]);
 
-  // Helper to parse dates from sheet (e.g. DD/MM/YY, DD/MM/YYYY, YYYY-MM-DD)
+  // Helper to parse dates from sheet using robust multi-format parser
   const parseSheetDate = (str?: string): Date | null => {
     if (!str) return null;
-    const s = str.trim();
-    if (!s) return null;
-
-    // YYYY-MM-DD or YYYY/MM/DD
-    const isoMatch = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-    if (isoMatch) {
-      const y = parseInt(isoMatch[1], 10);
-      const m = parseInt(isoMatch[2], 10) - 1;
-      const d = parseInt(isoMatch[3], 10);
-      const dt = new Date(y, m, d);
-      if (!isNaN(dt.getTime())) return dt;
-    }
-
-    // DD/MM/YY or DD/MM/YYYY or DD-MM-YY or DD-MM-YYYY
-    const dmyMatch = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
-    if (dmyMatch) {
-      const d = parseInt(dmyMatch[1], 10);
-      const m = parseInt(dmyMatch[2], 10) - 1;
-      let y = parseInt(dmyMatch[3], 10);
-      if (y < 100) y += 2000;
-      const dt = new Date(y, m, d);
-      if (!isNaN(dt.getTime())) return dt;
-    }
-
-    const fallback = new Date(s);
-    if (!isNaN(fallback.getTime())) return fallback;
-    return null;
+    const { dateObj } = parseAnyDateToTimestamp(str);
+    return dateObj;
   };
 
   // Normalize and match date filter (supports All Time, Today, Yesterday, Last 7 Days, Last 30 Days, Last Month, Custom Date Range, and specific Sheet dates)
-  const matchesDate = (orderDateStr?: string): boolean => {
+  const matchesDate = (orderDateStr?: string, orderRawDate?: string): boolean => {
     if (dateFilter === 'all') return true;
-    if (!orderDateStr) return false;
-    const cleanDate = orderDateStr.trim();
+    const raw = orderRawDate || orderDateStr;
+    if (!raw) return false;
+    const cleanDate = raw.trim();
 
-    // Direct match with specific sheet date string (e.g. '08/09/26')
-    if (cleanDate === dateFilter) return true;
+    const { dateObj: orderDate, cleanDateStr } = parseAnyDateToTimestamp(cleanDate);
 
-    const orderDate = parseSheetDate(cleanDate);
-    if (!orderDate) {
+    // Direct match with specific sheet date string (e.g. '08/09/2026' or '08/09/26')
+    if (cleanDate === dateFilter || cleanDateStr === dateFilter) return true;
+
+    if (!orderDate || isNaN(orderDate.getTime())) {
       if (dateFilter === 'custom') {
         if (customStartDate && cleanDate.includes(customStartDate)) return true;
         if (customEndDate && cleanDate.includes(customEndDate)) return true;
@@ -184,12 +245,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
     if (dateFilter === 'today') {
-      if (orderDate >= todayStart && orderDate <= todayEnd) return true;
-      const d = String(now.getDate()).padStart(2, '0');
-      const m = String(now.getMonth() + 1).padStart(2, '0');
-      const y = String(now.getFullYear()).slice(-2);
-      const todayStr = `${d}/${m}/${y}`;
-      return cleanDate === todayStr || cleanDate.includes(todayStr);
+      return orderDate >= todayStart && orderDate <= todayEnd;
     }
 
     if (dateFilter === 'yesterday') {
@@ -197,14 +253,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       yestStart.setDate(yestStart.getDate() - 1);
       const yestEnd = new Date(todayEnd);
       yestEnd.setDate(yestEnd.getDate() - 1);
-      if (orderDate >= yestStart && orderDate <= yestEnd) return true;
-      const yDate = new Date(now);
-      yDate.setDate(yDate.getDate() - 1);
-      const d = String(yDate.getDate()).padStart(2, '0');
-      const m = String(yDate.getMonth() + 1).padStart(2, '0');
-      const y = String(yDate.getFullYear()).slice(-2);
-      const yesterdayStr = `${d}/${m}/${y}`;
-      return cleanDate === yesterdayStr || cleanDate.includes(yesterdayStr);
+      return orderDate >= yestStart && orderDate <= yestEnd;
     }
 
     if (dateFilter === 'last7days') {
@@ -243,62 +292,35 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       return true;
     }
 
-    return cleanDate === dateFilter;
+    return cleanDateStr === dateFilter || cleanDate === dateFilter;
   };
 
   // Filtered orders matching selected date
   const dateFilteredOrders = useMemo(() => {
     if (dateFilter === 'all') return orders;
-    return orders.filter((o) => matchesDate(o.date));
+    return orders.filter((o) => matchesDate(o.date, o.rawDate));
   }, [orders, dateFilter, customStartDate, customEndDate, availableDates]);
 
-  // Order status helper functions
-  const isConfirmed = (status?: string) => {
-    const s = (status || '').toLowerCase();
-    return (
-      s.includes('confirm') ||
-      s.includes('complete') ||
-      s.includes('deliv') ||
-      s.includes('proc') ||
-      s.includes('প্রসেসিং') ||
-      s.includes('কমপ্লিট')
-    );
+  // Order status helper functions strictly powered by Column L
+  const isConfirmed = (_status?: string, courierStatus?: string) => {
+    const colL = getColumnLCourierStatus(courierStatus, _status);
+    return colL !== 'cancel';
   };
 
-  const isDelivered = (status?: string, courierStatus?: string) => {
-    const s = (status || '').toLowerCase();
-    const c = (courierStatus || '').toLowerCase();
-    return s.includes('deliv') || c === 'delivered' || s.includes('ডেলিভার্ড');
+  const isDelivered = (_status?: string, courierStatus?: string) => {
+    return getColumnLCourierStatus(courierStatus, _status) === 'delivery';
   };
 
-  const isPending = (status?: string, courierStatus?: string) => {
-    const s = (status || '').toLowerCase();
-    const c = (courierStatus || '').toLowerCase();
-    return (
-      s.includes('pend') ||
-      s.includes('hold') ||
-      c === 'in_review' ||
-      c === 'pending' ||
-      s.includes('পেন্ডিং') ||
-      s.includes('হোল্ড')
-    );
+  const isPending = (_status?: string, courierStatus?: string) => {
+    return getColumnLCourierStatus(courierStatus, _status) === 'pending';
   };
 
-  const isCancelled = (status?: string, courierStatus?: string) => {
-    const s = (status || '').toLowerCase();
-    const c = (courierStatus || '').toLowerCase();
-    return (
-      s.includes('cancel') ||
-      c === 'cancelled' ||
-      s.includes('বাতিল') ||
-      s.includes('ক্যান্সেল')
-    );
+  const isCancelled = (_status?: string, courierStatus?: string) => {
+    return getColumnLCourierStatus(courierStatus, _status) === 'cancel';
   };
 
-  const isPartial = (status?: string, courierStatus?: string) => {
-    const s = (status || '').toLowerCase();
-    const c = (courierStatus || '').toLowerCase();
-    return s.includes('part') || c === 'partial_delivered';
+  const isPartial = (_status?: string, courierStatus?: string) => {
+    return getColumnLCourierStatus(courierStatus, _status) === 'partial';
   };
 
   // The 6 canonical products from List sheet Column B, Sheet2 Column H toggle button & Sheet 1
@@ -379,118 +401,51 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     });
   }, [sheetProducts]);
 
-  // Aggregate stats across all products according to selected date
+  // Aggregate stats strictly from Sheet 2 orders Column L (for Total or Selected Date)
+  // Ensures Delivery, Pending, Partial, and Cancel counts have 0 mistake and accurately reflect Column L
   const aggregatedStats = useMemo(() => {
-    // If a specific date is chosen, calculate directly from dateFilteredOrders
-    if (dateFilter !== 'all') {
-      let filtered = dateFilteredOrders;
-      if (selectedProduct !== 'all') {
-        filtered = filtered.filter((o) => matchesProductName(o, selectedProduct));
-      }
-
-      const totalLead = filtered.length;
-      const totalConfirm = filtered.filter((o) => isConfirmed(o.status)).length;
-      const totalDelivery = filtered.filter((o) => isDelivered(o.status, o.courierStatus)).length;
-      const totalPending = filtered.filter((o) => isPending(o.status, o.courierStatus)).length;
-      const totalPartial = filtered.filter((o) => isPartial(o.status, o.courierStatus)).length;
-      const totalCancel = filtered.filter((o) => isCancelled(o.status, o.courierStatus)).length;
-      const totalQuantity = filtered.reduce((sum, o) => sum + (o.quantity || 1), 0);
-      const totalAmount = filtered.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
-
-      return {
-        totalLead,
-        totalConfirm,
-        confirmRate: totalLead > 0 ? `${((totalConfirm / totalLead) * 100).toFixed(1)}%` : '0%',
-        totalDelivery,
-        deliveryRate: totalConfirm > 0 ? `${((totalDelivery / totalConfirm) * 100).toFixed(1)}%` : '0%',
-        totalPending,
-        pendingRate: totalLead > 0 ? `${((totalPending / totalLead) * 100).toFixed(1)}%` : '0%',
-        totalPartial,
-        partialRate: totalLead > 0 ? `${((totalPartial / totalLead) * 100).toFixed(1)}%` : '0%',
-        totalQuantity,
-        totalCancel,
-        cancelRate: totalLead > 0 ? `${((totalCancel / totalLead) * 100).toFixed(1)}%` : '0%',
-        totalAmount,
-      };
+    let sourceOrders = dateFilter === 'all' ? orders : dateFilteredOrders;
+    if (selectedProduct !== 'all') {
+      sourceOrders = sourceOrders.filter((o) => matchesProductName(o, selectedProduct));
     }
 
-    // When date is 'all'
-    if (sheetProducts.length > 0) {
-      if (selectedProduct !== 'all') {
-        const p = sheetProducts.find((item) => item.productName === selectedProduct);
-        if (p) {
-          const matchingOrders = orders.filter((o) => matchesProductName(o, selectedProduct));
-          const totalAmount = matchingOrders.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
-          return {
-            totalLead: p.overall.lead || matchingOrders.length,
-            totalConfirm: p.overall.confirm,
-            confirmRate: p.overall.confirmRate,
-            totalDelivery: p.overall.delivery,
-            deliveryRate: p.overall.deliveryRate,
-            totalPending: p.overall.pending,
-            pendingRate: p.overall.pendingRate || (p.overall.lead > 0 ? `${((p.overall.pending / p.overall.lead) * 100).toFixed(1)}%` : '0%'),
-            totalPartial: p.overall.partial,
-            partialRate: p.overall.partialRate || (p.overall.lead > 0 ? `${((p.overall.partial / p.overall.lead) * 100).toFixed(1)}%` : '0%'),
-            totalQuantity: p.overall.quantity,
-            totalCancel: p.overall.cancel,
-            cancelRate: p.overall.cancelRate,
-            totalAmount,
-          };
-        }
-      }
+    const totalLead = sourceOrders.length;
+    let totalDelivery = 0;
+    let totalPending = 0;
+    let totalPartial = 0;
+    let totalCancel = 0;
+    let totalQuantity = 0;
+    let totalAmount = 0;
 
-      const lead = sheetProducts.reduce((sum, p) => sum + p.overall.lead, 0);
-      const confirm = sheetProducts.reduce((sum, p) => sum + p.overall.confirm, 0);
-      const delivery = sheetProducts.reduce((sum, p) => sum + p.overall.delivery, 0);
-      const pending = sheetProducts.reduce((sum, p) => sum + p.overall.pending, 0);
-      const partial = sheetProducts.reduce((sum, p) => sum + p.overall.partial, 0);
-      const quantity = sheetProducts.reduce((sum, p) => sum + p.overall.quantity, 0);
-      const cancel = sheetProducts.reduce((sum, p) => sum + p.overall.cancel, 0);
-      const totalAmount = orders.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
+    sourceOrders.forEach((o) => {
+      const colL = getColumnLCourierStatus(o.courierStatus, o.status);
+      if (colL === 'delivery') totalDelivery++;
+      else if (colL === 'pending') totalPending++;
+      else if (colL === 'partial') totalPartial++;
+      else if (colL === 'cancel') totalCancel++;
 
-      return {
-        totalLead: lead,
-        totalConfirm: confirm,
-        confirmRate: lead > 0 ? `${((confirm / lead) * 100).toFixed(1)}%` : '0%',
-        totalDelivery: delivery,
-        deliveryRate: confirm > 0 ? `${((delivery / confirm) * 100).toFixed(1)}%` : '0%',
-        totalPending: pending,
-        pendingRate: lead > 0 ? `${((pending / lead) * 100).toFixed(1)}%` : '0%',
-        totalPartial: partial,
-        partialRate: lead > 0 ? `${((partial / lead) * 100).toFixed(1)}%` : '0%',
-        totalQuantity: quantity,
-        totalCancel: cancel,
-        cancelRate: confirm > 0 ? `${((cancel / confirm) * 100).toFixed(1)}%` : '0%',
-        totalAmount,
-      };
-    }
+      totalQuantity += o.quantity || 1;
+      totalAmount += o.amount || o.total || 0;
+    });
 
-    // Fallback directly from orders if Sheet 1 not yet loaded
-    const totalLead = orders.length;
-    const totalConfirm = orders.filter((o) => isConfirmed(o.status)).length;
-    const totalDelivery = orders.filter((o) => isDelivered(o.status, o.courierStatus)).length;
-    const totalPending = orders.filter((o) => isPending(o.status, o.courierStatus)).length;
-    const totalPartial = orders.filter((o) => isPartial(o.status, o.courierStatus)).length;
-    const totalCancel = orders.filter((o) => isCancelled(o.status, o.courierStatus)).length;
-    const totalQuantity = orders.reduce((sum, o) => sum + (o.quantity || 1), 0);
-    const totalAmount = orders.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
+    const totalConfirm = totalDelivery + totalPending + totalPartial;
 
     return {
       totalLead,
       totalConfirm,
-      confirmRate: totalLead > 0 ? `${((totalConfirm / totalLead) * 100).toFixed(1)}%` : '0%',
+      confirmRate: totalLead > 0 ? `${((totalConfirm / totalLead) * 100).toFixed(1)}%` : '0.0%',
       totalDelivery,
-      deliveryRate: totalConfirm > 0 ? `${((totalDelivery / totalConfirm) * 100).toFixed(1)}%` : '0%',
+      deliveryRate: totalConfirm > 0 ? `${((totalDelivery / totalConfirm) * 100).toFixed(1)}%` : '0.0%',
       totalPending,
-      pendingRate: totalLead > 0 ? `${((totalPending / totalLead) * 100).toFixed(1)}%` : '0%',
+      pendingRate: totalLead > 0 ? `${((totalPending / totalLead) * 100).toFixed(1)}%` : '0.0%',
       totalPartial,
-      partialRate: totalLead > 0 ? `${((totalPartial / totalLead) * 100).toFixed(1)}%` : '0%',
+      partialRate: totalLead > 0 ? `${((totalPartial / totalLead) * 100).toFixed(1)}%` : '0.0%',
       totalQuantity,
       totalCancel,
-      cancelRate: totalLead > 0 ? `${((totalCancel / totalLead) * 100).toFixed(1)}%` : '0%',
+      cancelRate: totalLead > 0 ? `${((totalCancel / totalLead) * 100).toFixed(1)}%` : '0.0%',
       totalAmount,
     };
-  }, [sheetProducts, selectedProduct, dateFilter, dateFilteredOrders, orders]);
+  }, [orders, dateFilteredOrders, dateFilter, selectedProduct]);
 
   // Filtered products list based on search and pill filter
   const filteredProducts = useMemo(() => {
@@ -664,82 +619,43 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       amount: 0,
     };
 
-    if (dateFilter !== 'all') {
-      const lead = relatedDateOrders.length;
-      const confirm = relatedDateOrders.filter((o) => isConfirmed(o.status)).length;
-      const delivery = relatedDateOrders.filter((o) => isDelivered(o.status, o.courierStatus)).length;
-      const pending = relatedDateOrders.filter((o) => isPending(o.status, o.courierStatus)).length;
-      const partial = relatedDateOrders.filter((o) => isPartial(o.status, o.courierStatus)).length;
-      const cancel = relatedDateOrders.filter((o) => isCancelled(o.status, o.courierStatus)).length;
-      const quantity = relatedDateOrders.reduce((sum, o) => sum + (o.quantity || 1), 0);
-      const amount = relatedDateOrders.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
+    const targetOrders = dateFilter !== 'all' ? relatedDateOrders : allRelatedOrders;
+    const lead = targetOrders.length;
+    let delivery = 0;
+    let pending = 0;
+    let partial = 0;
+    let cancel = 0;
+    let quantity = 0;
+    let amount = 0;
 
-      prodStats = {
-        lead,
-        confirm,
-        confirmRate: lead > 0 ? `${((confirm / lead) * 100).toFixed(1)}%` : '0.0%',
-        delivery,
-        deliveryRate: confirm > 0 ? `${((delivery / confirm) * 100).toFixed(1)}%` : '0.0%',
-        pending,
-        pendingRate: lead > 0 ? `${((pending / lead) * 100).toFixed(1)}%` : '0.0%',
-        partial,
-        partialRate: lead > 0 ? `${((partial / lead) * 100).toFixed(1)}%` : '0.0%',
-        quantity,
-        cancel,
-        cancelRate: lead > 0 ? `${((cancel / lead) * 100).toFixed(1)}%` : '0.0%',
-        amount,
-      };
-    } else if (prod.sheetReport) {
-      const lead = prod.sheetReport.overall.lead || allRelatedOrders.length;
-      const confirm = prod.sheetReport.overall.confirm;
-      const delivery = prod.sheetReport.overall.delivery;
-      const pending = prod.sheetReport.overall.pending;
-      const partial = prod.sheetReport.overall.partial;
-      const quantity = prod.sheetReport.overall.quantity || allRelatedOrders.reduce((sum, o) => sum + (o.quantity || 1), 0);
-      const cancel = prod.sheetReport.overall.cancel;
-      const amount = allRelatedOrders.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
+    targetOrders.forEach((o) => {
+      const colL = getColumnLCourierStatus(o.courierStatus, o.status);
+      if (colL === 'delivery') delivery++;
+      else if (colL === 'pending') pending++;
+      else if (colL === 'partial') partial++;
+      else if (colL === 'cancel') cancel++;
 
-      prodStats = {
-        lead,
-        confirm,
-        confirmRate: prod.sheetReport.overall.confirmRate || (lead > 0 ? `${((confirm / lead) * 100).toFixed(1)}%` : '0.0%'),
-        delivery,
-        deliveryRate: prod.sheetReport.overall.deliveryRate || (confirm > 0 ? `${((delivery / confirm) * 100).toFixed(1)}%` : '0.0%'),
-        pending,
-        pendingRate: prod.sheetReport.overall.pendingRate || (lead > 0 ? `${((pending / lead) * 100).toFixed(1)}%` : '0.0%'),
-        partial,
-        partialRate: prod.sheetReport.overall.partialRate || (lead > 0 ? `${((partial / lead) * 100).toFixed(1)}%` : '0.0%'),
-        quantity,
-        cancel,
-        cancelRate: prod.sheetReport.overall.cancelRate || (lead > 0 ? `${((cancel / lead) * 100).toFixed(1)}%` : '0.0%'),
-        amount,
-      };
-    } else {
-      const lead = allRelatedOrders.length;
-      const confirm = allRelatedOrders.filter((o) => isConfirmed(o.status)).length;
-      const delivery = allRelatedOrders.filter((o) => isDelivered(o.status, o.courierStatus)).length;
-      const pending = allRelatedOrders.filter((o) => isPending(o.status, o.courierStatus)).length;
-      const partial = allRelatedOrders.filter((o) => isPartial(o.status, o.courierStatus)).length;
-      const cancel = allRelatedOrders.filter((o) => isCancelled(o.status, o.courierStatus)).length;
-      const quantity = allRelatedOrders.reduce((sum, o) => sum + (o.quantity || 1), 0);
-      const amount = allRelatedOrders.reduce((sum, o) => sum + (o.amount || o.total || 0), 0);
+      quantity += o.quantity || 1;
+      amount += o.amount || o.total || 0;
+    });
 
-      prodStats = {
-        lead,
-        confirm,
-        confirmRate: lead > 0 ? `${((confirm / lead) * 100).toFixed(1)}%` : '0.0%',
-        delivery,
-        deliveryRate: confirm > 0 ? `${((delivery / confirm) * 100).toFixed(1)}%` : '0.0%',
-        pending,
-        pendingRate: lead > 0 ? `${((pending / lead) * 100).toFixed(1)}%` : '0.0%',
-        partial,
-        partialRate: lead > 0 ? `${((partial / lead) * 100).toFixed(1)}%` : '0.0%',
-        quantity,
-        cancel,
-        cancelRate: lead > 0 ? `${((cancel / lead) * 100).toFixed(1)}%` : '0.0%',
-        amount,
-      };
-    }
+    const confirm = delivery + pending + partial;
+
+    prodStats = {
+      lead,
+      confirm,
+      confirmRate: lead > 0 ? `${((confirm / lead) * 100).toFixed(1)}%` : '0.0%',
+      delivery,
+      deliveryRate: confirm > 0 ? `${((delivery / confirm) * 100).toFixed(1)}%` : '0.0%',
+      pending,
+      pendingRate: lead > 0 ? `${((pending / lead) * 100).toFixed(1)}%` : '0.0%',
+      partial,
+      partialRate: lead > 0 ? `${((partial / lead) * 100).toFixed(1)}%` : '0.0%',
+      quantity,
+      cancel,
+      cancelRate: lead > 0 ? `${((cancel / lead) * 100).toFixed(1)}%` : '0.0%',
+      amount,
+    };
 
     // Per-source stats
     const sourcesList: {

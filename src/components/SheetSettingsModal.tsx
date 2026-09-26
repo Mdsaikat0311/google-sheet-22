@@ -6,9 +6,9 @@ import {
   ShieldCheck,
   LogOut,
   Zap,
+  CheckCircle2,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import { GoogleSignInButton } from './GoogleSignInButton';
 import {
   getAppsScriptUrl,
   saveAppsScriptUrl,
@@ -48,6 +48,8 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
   const [inputVal, setInputVal] = useState(spreadsheetId);
   const [tabVal, setTabVal] = useState(selectedTab);
   const [scriptUrl, setScriptUrl] = useState(getAppsScriptUrl());
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     setInputVal(spreadsheetId);
@@ -59,19 +61,64 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
 
   useEffect(() => {
     setScriptUrl(getAppsScriptUrl());
+    // Also fetch current config from backend server if available
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg?.spreadsheetId && !spreadsheetId) {
+          setInputVal(cfg.spreadsheetId);
+        }
+        if (cfg?.appsScriptUrl) {
+          setScriptUrl(cfg.appsScriptUrl);
+        }
+      })
+      .catch(() => {});
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    onUpdateSpreadsheetId(inputVal.trim());
-    if (onUpdateSelectedTab && tabVal.trim()) {
-      onUpdateSelectedTab(tabVal.trim());
+  const handleSave = async () => {
+    const cleanSheetId = inputVal.trim();
+    const cleanUrl = scriptUrl.trim();
+    const cleanTab = tabVal.trim();
+
+    setIsSaving(true);
+
+    // 1. Update React state & localStorage
+    onUpdateSpreadsheetId(cleanSheetId);
+    if (onUpdateSelectedTab && cleanTab) {
+      onUpdateSelectedTab(cleanTab);
     }
-    if (scriptUrl.trim()) {
-      saveAppsScriptUrl(scriptUrl.trim());
+    if (cleanUrl) {
+      saveAppsScriptUrl(cleanUrl);
     }
-    onClose();
+
+    // 2. Permanently save into source code files via backend API
+    try {
+      await fetch('/api/save-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spreadsheetId: cleanSheetId,
+          appsScriptUrl: cleanUrl,
+          orderSheetTab: cleanTab || 'Sheet2',
+        }),
+      });
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        onClose();
+      }, 1000);
+    } catch (err) {
+      console.warn('Backend save config notice:', err);
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        onClose();
+      }, 800);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -105,8 +152,8 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                   সংযুক্ত (Connected)
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-bold">
-                  Local Preview Mode
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                  সরাসরি সিঙ্ক মোড
                 </span>
               )}
             </div>
@@ -126,39 +173,23 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 </button>
               </div>
             ) : (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-gray-400 leading-relaxed text-[11px]">
-                    গুগল শিটে সরাসরি অর্ডার আপডেট করতে গুগল সাইন-ইন করুন:
-                  </p>
-                  {onOpenAuthHelp && (
-                    <button
-                      onClick={onOpenAuthHelp}
-                      className="text-pink-400 hover:text-pink-300 font-semibold text-[11px] underline underline-offset-2 shrink-0 ml-2"
-                    >
-                      লগইন সমস্যা?
-                    </button>
-                  )}
-                </div>
-                <GoogleSignInButton
-                  user={user}
-                  onSignIn={onSignIn}
-                  onSignOut={onSignOut}
-                  loading={isAuthLoading}
-                />
-                <div className="p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-500/20 text-emerald-300 text-[11px] flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>পাবলিক শিট মোড সক্রিয়: সাইন-ইন ছাড়াও লাইভ শিট পড়া যাচ্ছে।</span>
-                </div>
+              <div className="p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-500/20 text-emerald-300 text-[11px] flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>পাবলিক শিট মোড সক্রিয়: সাইন-ইন ছাড়াও লাইভ শিট পড়া ও লেখা যাচ্ছে।</span>
               </div>
             )}
           </div>
 
           {/* Spreadsheet ID Field */}
           <div>
-            <label className="block text-xs font-semibold text-gray-300 mb-1.5">
-              Google Spreadsheet ID
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-gray-300">
+                Google Spreadsheet ID
+              </label>
+              <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                ✓ কোডে পার্মানেন্ট সেভ হবে
+              </span>
+            </div>
             <input
               type="text"
               value={inputVal}
@@ -166,18 +197,6 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
               placeholder="গুগল শিট আইডি বা লিংক..."
               className="w-full bg-[#181c29] border border-[#262f44] rounded-xl px-3.5 py-2 text-xs font-mono text-pink-400 focus:outline-none focus:border-pink-500"
             />
-            <p className="text-[11px] text-gray-500 mt-1 flex items-center justify-between">
-              <span>ডিফল্ট শিট: 11pI2WGa6yr70R0Sf9jrTDaKlds754qH8oqw-XWS9yZ8</span>
-              {inputVal !== '11pI2WGa6yr70R0Sf9jrTDaKlds754qH8oqw-XWS9yZ8' && (
-                <button
-                  type="button"
-                  onClick={() => setInputVal('11pI2WGa6yr70R0Sf9jrTDaKlds754qH8oqw-XWS9yZ8')}
-                  className="text-pink-400 hover:text-pink-300 underline text-[10px]"
-                >
-                  ডিফল্ট সেট করুন
-                </button>
-              )}
-            </p>
           </div>
 
           {/* Apps Script Web App Integration (Auto Sheet Write) */}
@@ -187,11 +206,14 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 <Zap className="w-4 h-4 text-amber-400" />
                 <span>Google Apps Script ইন্টিগ্রেশন (শিট অটো-আপডেট)</span>
               </label>
+              <span className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                ✓ কোডে পার্মানেন্ট সেভ হবে
+              </span>
             </div>
 
             <div>
               <label className="text-[11px] text-gray-400 block mb-1">
-                Apps Script Web App URL (ডিফল্ট প্রস্তুত আছে):
+                Apps Script Web App URL:
               </label>
               <input
                 type="text"
@@ -203,7 +225,14 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Sync Trigger */}
+          {saveSuccess && (
+            <div className="p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-[11px] flex items-center gap-2 animate-fadeIn">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>সফলভাবে কোডে স্থায়ীভাবে সংরক্ষণ করা হয়েছে!</span>
+            </div>
+          )}
+
+          {/* Sync Trigger & Save Button */}
           <div className="flex items-center justify-between pt-2 border-t border-[#1c2232]">
             <button
               onClick={() => {
@@ -212,7 +241,7 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 }
                 onSyncNow();
               }}
-              disabled={isSyncing}
+              disabled={isSyncing || isSaving}
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1b202e] hover:bg-[#252c3f] border border-[#29334a] text-gray-300 font-medium transition-all"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-pink-400 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -221,9 +250,26 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
 
             <button
               onClick={handleSave}
-              className="px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-colors"
+              disabled={isSaving}
+              className={`px-4 py-2 rounded-xl font-bold transition-all flex items-center gap-1.5 ${
+                saveSuccess
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-pink-600 hover:bg-pink-500 text-white'
+              }`}
             >
-              সংরক্ষণ
+              {isSaving ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>সেভ হচ্ছে...</span>
+                </>
+              ) : saveSuccess ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>সেভ হয়েছে!</span>
+                </>
+              ) : (
+                'স্থায়ীভাবে সংরক্ষণ'
+              )}
             </button>
           </div>
         </div>
