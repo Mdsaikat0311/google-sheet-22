@@ -157,6 +157,21 @@ export const has9DigitTrackingCode = (tracking?: string | null): boolean => {
 };
 
 /**
+ * Helper to check if Column J status is strictly 'complete' / 'completed' / 'কমপ্লিট'.
+ * User requirement: "sodo matro j colum a j golo sodo complete thakbe"
+ */
+export const isColumnJComplete = (status?: string | null): boolean => {
+  if (!status) return false;
+  const s = String(status).toLowerCase().trim();
+  return (
+    s.includes('complete') ||
+    s.includes('কমপ্লিট') ||
+    s === 'completed' ||
+    s === 'comp'
+  );
+};
+
+/**
  * Helper to check if Column L has an active courier delivery status.
  * Matches user requirements: "colum l inreview, pending, cancel, partial delivery, ba approval pendig ba ,,, ashob order deluivery status"
  */
@@ -218,46 +233,48 @@ export const hasTrackingAndStatusMatch = (order: Order): boolean => {
 
 /**
  * Checks if an order is eligible according to user instructions:
- * 1. Ready for Delivery: 9-digit tracking (Column K) AND courier delivery status (Column L - inreview or other) must BOTH match together.
- *    If only 1 matches or neither matches, the order automatically stays in Ready for Delivery ("2 tai match hole hobe, akta match hole hobe na").
- * 2. Today Entry: Both match, Column K HAS 9-digit tracking code AND Column L has ONLY inreview ("sodo inreview thakbe")
- * 3. Excluded: Both match, but courier status is other delivery status (e.g. delivered, cancelled, partial delivery, etc.)
+ * 1. Ready for Delivery: ONLY when Column J is strictly Complete AND Column K has NO 9-digit ID AND Column L has NO status.
+ *    User requirement: "ei tab er list a jeno sodo matro j colum a j golo sodo complete thakbe and k colum and l colum a 9 digit id and status thakbe na segului sodo list a thakbe"
+ * 2. Today Entry: Column K has 9-digit tracking code AND Column L has ONLY inreview ("sodo inreview thakbe")
+ * 3. Excluded: Non-complete orders or orders with existing tracking/delivery status in courier.
  */
 export const checkSteadfastEligibility = (order: Order) => {
+  const isCompleteJ = isColumnJComplete(order.status);
   const has9DigitTracking = has9DigitTrackingCode(order.trackingCode);
   const hasCourierStatus = hasValidCourierStatus(order.courierStatus);
   const isInReview = isInReviewCourierStatus(order.courierStatus);
 
-  // Both 9-digit tracking code and courier status must match together:
-  // "9 digit and couriar status golo 2 tai match hole hobe ,, akta match hole hobe na"
-  const isKLMatched = has9DigitTracking && hasCourierStatus;
-
-  // Ready for Delivery: Automatically stays here if BOTH are not matched together
-  const isEligible = !isKLMatched;
+  // Ready for Delivery (unentered):
+  // Strictly: Column J must be 'complete' AND Column K has NO 9-digit tracking AND Column L has NO courier status
+  const isEligible = isCompleteJ && !has9DigitTracking && !hasCourierStatus;
 
   // Today Entry: 9-digit tracking in Column K AND Column L has inreview
   const isTodayEntry = has9DigitTracking && isInReview;
 
+  const isKLMatched = has9DigitTracking && hasCourierStatus;
   const mStatus = String(order.steadfastStatus || '').toLowerCase().trim();
   const isSentM = mStatus.includes('send to steadfast') || mStatus.includes('sent');
 
   let excludeReason = '';
   if (isEligible) {
-    if (!has9DigitTracking && !hasCourierStatus) {
-      excludeReason = 'Ready for Delivery (K ও L ফাঁকা)';
-    } else if (has9DigitTracking && !hasCourierStatus) {
-      excludeReason = 'Ready for Delivery (L কুরিয়ার স্ট্যাটাস অপেক্ষারত)';
-    } else {
-      excludeReason = 'Ready for Delivery (K ট্র্যাকিং কোড অপেক্ষারত)';
-    }
+    excludeReason = 'Ready for Delivery (J: Complete, K ও L ফাঁকা)';
   } else if (isTodayEntry) {
     excludeReason = `Today Entry (K: ${order.trackingCode}, L: ${order.courierStatus})`;
+  } else if (!isCompleteJ) {
+    excludeReason = `Excluded (J: ${order.status || 'Pending'} - Complete নয়)`;
+  } else if (has9DigitTracking && hasCourierStatus) {
+    excludeReason = `Excluded (K: ${order.trackingCode}, L: ${order.courierStatus})`;
+  } else if (has9DigitTracking) {
+    excludeReason = `Excluded (K: ${order.trackingCode} ট্র্যাকিং কোড আছে)`;
+  } else if (hasCourierStatus) {
+    excludeReason = `Excluded (L: ${order.courierStatus} কুরিয়ার স্ট্যাটাস আছে)`;
   } else {
-    excludeReason = `Excluded / হিস্ট্রি (K: ${order.trackingCode || 'নেই'}, L: ${order.courierStatus || 'নেই'})`;
+    excludeReason = 'Excluded / হিস্ট্রি';
   }
 
   return {
     isEligible,
+    isCompleteJ,
     has9DigitTracking,
     hasCourierStatus,
     isInReview,
