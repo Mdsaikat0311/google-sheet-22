@@ -16,6 +16,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { Order, Product } from '../types';
+import { getStoredListProductNames } from '../services/sheets';
 
 interface SteadfastViewProps {
   orders: Order[];
@@ -27,6 +28,7 @@ interface SteadfastViewProps {
   onSelectOrder: (order: Order) => void;
   spreadsheetId?: string;
   orderSheetTab?: string;
+  listProductNames?: string[];
 }
 
 /**
@@ -276,6 +278,7 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
   onSelectOrder,
   spreadsheetId,
   orderSheetTab = 'Sheet2',
+  listProductNames,
 }) => {
   // Active sub-tab: 'unentered' (ready for entry) vs 'today_entry' (entered today) vs 'excluded' (all sent/excluded)
   const [activeSubTab, setActiveSubTab] = useState<'unentered' | 'today_entry' | 'excluded' | 'all'>('unentered');
@@ -381,19 +384,21 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
     });
   };
 
-  // 6 canonical products + All Product + No Sellect for the toggle
+  // 6 products from List Sheet Column B + All Product + No Sellect for the toggle
   const productFilterTabs = useMemo(() => {
+    const list =
+      listProductNames && listProductNames.length >= 6
+        ? listProductNames.slice(0, 6)
+        : getStoredListProductNames();
+
+    const icons = ['🌹', '⌚', '🧸', '✂️', '🌸', '🌺'];
+
     return [
       { id: 'ALL', label: 'All Product', icon: '📦' },
-      { id: 'Rose 599tk', label: 'Rose 599tk', icon: '🌹' },
-      { id: 'Doll and toys', label: 'Doll and toys', icon: '🧸' },
-      { id: 'Watch 599tk', label: 'Watch 599tk', icon: '⌚' },
-      { id: 'Cutting Dispancer', label: 'Cutting Dispancer', icon: '✂️' },
-      { id: 'Porbash Rose 990tk', label: 'Porbash Rose 990tk', icon: '🌸' },
-      { id: 'Porbash Rose 1350tk', label: 'Porbash Rose 1350tk', icon: '🌺' },
+      ...list.map((name, idx) => ({ id: name, label: name, icon: icons[idx] || '🏷️' })),
       { id: 'NO_SELLECT', label: 'No Sellect', icon: '⚠️' },
     ];
-  }, []);
+  }, [listProductNames]);
 
   // Compute eligibility for every order
   const evaluatedOrders = useMemo(() => {

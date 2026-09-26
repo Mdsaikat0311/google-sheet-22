@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Edit3, Calendar, Send, Loader2, Code2, Check } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
+import { getStoredListProductNames } from '../services/sheets';
 
 interface NewOrderModalProps {
   isOpen: boolean;
@@ -9,16 +10,8 @@ interface NewOrderModalProps {
   isSubmitting: boolean;
 }
 
-// Column H (Variant) options - strictly Google Sheet Column H 6 products + No Sellect
-const availableVariants = [
-  'No Sellect',
-  'Rose 599tk',
-  'Doll and toys',
-  'Watch 599tk',
-  'Porbash Rose 990tk',
-  'Porbash Rose 1350tk',
-  'Cutting Dispancer',
-];
+// Column H (Variant) options - strictly List Sheet Column B 6 products + No Sellect
+const getAvailableVariants = () => ['No Sellect', ...getStoredListProductNames()];
 
 // Column I (Source) options - verified from Google Sheet
 const availableSources = [
@@ -65,6 +58,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   onSubmit,
   isSubmitting,
 }) => {
+  const availableVariants = useMemo(() => getAvailableVariants(), [isOpen]);
   const [invoiceId, setInvoiceId] = useState('');
   const [orderDateTime, setOrderDateTime] = useState('');
   const [customerName, setCustomerName] = useState('');
@@ -72,7 +66,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   const [customerAddress, setCustomerAddress] = useState('');
   const [price, setPrice] = useState<number>(599);
   const [quantity, setQuantity] = useState<number>(1);
-  const [variant, setVariant] = useState('Rose 599tk');
+  const [variant, setVariant] = useState('Rose 599');
   const [source, setSource] = useState('Website');
   const [status, setStatus] = useState<OrderStatus>('Complete');
   const [isLocalSubmitting, setIsLocalSubmitting] = useState(false);
@@ -90,11 +84,11 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
       setCustomerAddress('');
       setPrice(599);
       setQuantity(1);
-      setVariant('Rose 599tk');
+      setVariant(availableVariants[1] || 'Rose 599');
       setSource('Website');
       setStatus('Complete');
     }
-  }, [isOpen]);
+  }, [isOpen, availableVariants]);
 
   if (!isOpen) return null;
 

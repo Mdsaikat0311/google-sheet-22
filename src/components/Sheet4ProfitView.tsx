@@ -52,6 +52,7 @@ interface Sheet4ProfitViewProps {
   onRefresh: () => void;
   lastUpdated?: Date | null;
   spreadsheetId: string;
+  listProductNames?: string[];
 }
 
 export const Sheet4ProfitView: React.FC<Sheet4ProfitViewProps> = ({
@@ -60,6 +61,7 @@ export const Sheet4ProfitView: React.FC<Sheet4ProfitViewProps> = ({
   onRefresh,
   lastUpdated,
   spreadsheetId,
+  listProductNames,
 }) => {
   // Calendar & Date Filters state
   const [dateMode, setDateMode] = useState<'all' | 'single' | 'range'>('all');
@@ -74,18 +76,27 @@ export const Sheet4ProfitView: React.FC<Sheet4ProfitViewProps> = ({
     Record<string, { showLive: boolean; showDemo: boolean }>
   >({});
 
-  // 6 Core Products for Sheet4
-  const SHEET4_CORE_PRODUCTS = useMemo(
-    () => [
+  // 6 Core Products for Sheet4 (dynamically synchronized with List sheet Column B if available)
+  const SHEET4_CORE_PRODUCTS = useMemo(() => {
+    if (listProductNames && listProductNames.length >= 6) {
+      return listProductNames;
+    }
+    try {
+      const saved = localStorage.getItem('sheet_list_product_names');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 6) return parsed;
+      }
+    } catch (e) {}
+    return [
       'Watch 599tk',
       'Rose 599tk',
       'Doll and toys',
       'Cutting Dispancer',
       'Porbash Rose 990tk',
       'Porbash Rose 1350tk',
-    ],
-    []
-  );
+    ];
+  }, [listProductNames]);
 
   // All unique products list (Core 6 products + any dynamic products from rows)
   const uniqueProducts = useMemo(() => {

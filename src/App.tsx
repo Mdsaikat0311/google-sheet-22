@@ -11,7 +11,6 @@ import {
   BarChart3,
   Plus,
   Truck,
-  TrendingUp,
 } from 'lucide-react';
 import { Order, OrderStatus, Product, CartItem, StockMovementLog, Sheet3ProductEntry, Sheet4ProfitRow } from './types';
 import { INITIAL_ORDERS } from './data/initialOrders';
@@ -43,6 +42,7 @@ import {
   updateSheet3Entry,
   appendSheet3Entry,
   fetchSheet4ProfitData,
+  fetchListSheetProductNames,
   updateOrderCardViaAppsScript,
   buildOrderCardPayload,
   sendSteadfastOrdersViaAppsScript,
@@ -60,7 +60,6 @@ import { ViewOrderModal } from './components/ViewOrderModal';
 import { SheetSettingsModal } from './components/SheetSettingsModal';
 import { AuthHelpModal } from './components/AuthHelpModal';
 import { SteadfastView, checkSteadfastEligibility } from './components/SteadfastView';
-import { Sheet4ProfitView } from './components/Sheet4ProfitView';
 
 export default function App() {
   // Authentication state
@@ -262,6 +261,41 @@ export default function App() {
     }
   };
 
+  // 6 Dynamic Product Names from 'List' Sheet Column B
+  const [listProductNames, setListProductNames] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('sheet_list_product_names');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 6) return parsed;
+      }
+    } catch (e) {}
+    return [
+      'Rose 599',
+      'Watch 599',
+      'Doll and toys tk',
+      'Cutting Dispancer tk',
+      'Porbash Rose 990',
+      'Porbash Rose 1350',
+    ];
+  });
+
+  const loadListNamesLive = async (
+    targetSpreadsheetId: string = spreadsheetId,
+    token: string | null = accessToken
+  ) => {
+    try {
+      const cleanId = extractSpreadsheetId(targetSpreadsheetId);
+      const names = await fetchListSheetProductNames(cleanId, token);
+      if (names && names.length >= 6) {
+        setListProductNames(names);
+        localStorage.setItem('sheet_list_product_names', JSON.stringify(names));
+      }
+    } catch (err) {
+      console.warn('Failed to live-load List sheet product names:', err);
+    }
+  };
+
   // Modals state
   const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
   const [selectedOrderForView, setSelectedOrderForView] = useState<Order | null>(null);
@@ -435,24 +469,28 @@ export default function App() {
     }
   };
 
-  // Real-time listener for Sheet 3, Sheet 4 & Orders (Polling every 15s + Window Focus + Tab Visibility refresh)
+  // Real-time listener for Sheet 3, Sheet 4, List Sheet & Orders (Polling every 15s + Window Focus + Tab Visibility refresh)
   useEffect(() => {
+    loadListNamesLive(spreadsheetId, accessToken);
     loadSheet3StockLive(spreadsheetId);
     loadSheet4DataLive(spreadsheetId, accessToken);
     syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
     const interval = setInterval(() => {
+      loadListNamesLive(spreadsheetId, accessToken);
       loadSheet3StockLive(spreadsheetId);
       loadSheet4DataLive(spreadsheetId, accessToken);
       syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
     }, 15000);
 
     const onFocus = () => {
+      loadListNamesLive(spreadsheetId, accessToken);
       loadSheet3StockLive(spreadsheetId);
       loadSheet4DataLive(spreadsheetId, accessToken);
       syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
     };
     const onVisibilityChange = () => {
       if (!document.hidden) {
+        loadListNamesLive(spreadsheetId, accessToken);
         loadSheet3StockLive(spreadsheetId);
         loadSheet4DataLive(spreadsheetId, accessToken);
         syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
@@ -500,6 +538,7 @@ export default function App() {
     if (!silent) setIsSyncing(true);
     try {
       const cleanId = extractSpreadsheetId(targetSpreadsheetId);
+      loadListNamesLive(cleanId, targetToken || undefined);
       const sheetResult = await getSheetOrders(cleanId, targetToken || undefined, targetTab);
 
       if (sheetResult.orders && sheetResult.orders.length > 0) {
@@ -1675,6 +1714,9 @@ export default function App() {
               onAddSheet3Entry={handleAddSheet3Entry}
               onRefreshSheet3={() => loadSheet3StockLive(spreadsheetId)}
               isRefreshingSheet3={isRefreshingSheet3}
+              spreadsheetId={spreadsheetId}
+              accessToken={accessToken}
+              listProductNames={listProductNames}
             />
           )}
 
@@ -1696,6 +1738,7 @@ export default function App() {
               onUpdateCustomerDetails={handleUpdateCustomerDetails}
               onUpdateFullOrder={handleUpdateFullOrder}
               onDeleteOrder={handleDeleteOrder}
+              listProductNames={listProductNames}
             />
           )}
 
@@ -1712,6 +1755,7 @@ export default function App() {
               onSelectOrder={(order) => setSelectedOrderForView(order)}
               spreadsheetId={spreadsheetId}
               orderSheetTab={orderSheetTab}
+              listProductNames={listProductNames}
             />
           )}
 
@@ -1719,16 +1763,7 @@ export default function App() {
             <ReportsView
               spreadsheetId={spreadsheetId}
               orders={orders}
-            />
-          )}
-
-          {activeTab === 'profit' && (
-            <Sheet4ProfitView
-              rows={sheet4Rows}
-              isLoading={isSheet4Loading}
-              onRefresh={() => loadSheet4DataLive(spreadsheetId, accessToken)}
-              lastUpdated={sheet4LastUpdated}
-              spreadsheetId={spreadsheetId}
+              listProductNames={listProductNames}
             />
           )}
 
@@ -1819,17 +1854,6 @@ export default function App() {
           <BarChart3 className="w-5 h-5" />
           <span className="text-[10px]">Analytics</span>
         </button>
-
-        {/* Tab 5: Sheet4 Profit */}
-        <button
-          onClick={() => setActiveTab('profit')}
-          className={`flex flex-col items-center gap-1 transition-all ${
-            activeTab === 'profit' ? 'text-emerald-400 font-semibold' : 'text-gray-400 hover:text-gray-200'
-          }`}
-        >
-          <TrendingUp className="w-5 h-5" />
-          <span className="text-[10px]">Profit</span>
-        </button>
       </nav>
 
       {/* Floating Toast Notification */}
@@ -1871,6 +1895,7 @@ export default function App() {
         onUpdateImage={handleUpdateImage}
         onDeleteOrder={handleDeleteOrder}
         onUpdateCustomerDetails={handleUpdateCustomerDetails}
+        listProductNames={listProductNames}
       />
 
       {/* Google Sheet Settings Modal */}

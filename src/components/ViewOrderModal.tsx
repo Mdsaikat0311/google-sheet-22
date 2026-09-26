@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   Printer,
@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { getOrderImage } from '../utils/orderImage';
+import { getStoredListProductNames } from '../services/sheets';
 
 interface ViewOrderModalProps {
   order: Order | null;
@@ -44,18 +45,8 @@ interface ViewOrderModalProps {
       quantity?: number;
     }
   ) => Promise<boolean> | void;
+  listProductNames?: string[];
 }
-
-const AVAILABLE_VARIANTS = [
-  'No Sellect',
-  'Rose 599tk',
-  'Doll and toys',
-  'Watch 599tk',
-  'Porbash Rose 990tk',
-  'Porbash Rose 1350tk',
-  'Cutting Dispancer',
-  'Golden Watch Combo',
-];
 
 const AVAILABLE_SOURCES = [
   'Website',
@@ -92,9 +83,41 @@ export const ViewOrderModal: React.FC<ViewOrderModalProps> = ({
   onUpdateImage,
   onDeleteOrder,
   onUpdateCustomerDetails,
+  listProductNames,
 }) => {
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Strictly the 6 products from List Sheet Column B + No Sellect
+  const availableVariants = useMemo(() => {
+    const list =
+      listProductNames && listProductNames.length >= 6
+        ? listProductNames.slice(0, 6)
+        : getStoredListProductNames();
+
+    return ['No Sellect', ...list];
+  }, [listProductNames]);
+
+  // Check if a variant button is currently active
+  const isVariantActive = (currentVariant: string | undefined, variantOption: string) => {
+    if (variantOption === 'No Sellect') {
+      const v = (currentVariant || '').trim().toLowerCase();
+      return !v || v === 'no sellect' || v === 'nosellect' || v === 'noselect';
+    }
+    const curNorm = (currentVariant || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const optNorm = variantOption.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (curNorm === optNorm) return true;
+    if (curNorm.includes(optNorm) || optNorm.includes(curNorm)) return true;
+
+    if (optNorm.includes('599') && optNorm.includes('rose') && curNorm.includes('rose') && !curNorm.includes('990') && !curNorm.includes('1350')) return true;
+    if (optNorm.includes('599') && optNorm.includes('watch') && (curNorm.includes('watch') || curNorm.includes('golden'))) return true;
+    if (optNorm.includes('990') && curNorm.includes('990')) return true;
+    if (optNorm.includes('1350') && curNorm.includes('1350')) return true;
+    if ((optNorm.includes('doll') || optNorm.includes('toy')) && (curNorm.includes('doll') || curNorm.includes('toy'))) return true;
+    if ((optNorm.includes('disp') || optNorm.includes('cutt')) && (curNorm.includes('disp') || curNorm.includes('cutt'))) return true;
+
+    return false;
+  };
 
   // Customer & Price Editing State
   const [isEditingCustomer, setIsEditingCustomer] = useState(false);
@@ -371,8 +394,8 @@ export const ViewOrderModal: React.FC<ViewOrderModalProps> = ({
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1">
-              {AVAILABLE_VARIANTS.map((v) => {
-                const isSelected = (order.variant || 'No Sellect') === v;
+              {availableVariants.map((v) => {
+                const isSelected = isVariantActive(order.variant, v);
                 return (
                   <button
                     key={v}
@@ -384,7 +407,7 @@ export const ViewOrderModal: React.FC<ViewOrderModalProps> = ({
                     }}
                     className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border text-left truncate transition-all cursor-pointer flex items-center justify-between ${
                       isSelected
-                        ? 'bg-pink-600/20 text-pink-300 border-pink-500/60 shadow-xs'
+                        ? 'bg-pink-600/20 text-pink-300 border-pink-500/60 shadow-xs font-bold'
                         : 'bg-[#0f121b] text-gray-400 border-[#232a3d] hover:bg-[#1a1f30] hover:text-gray-200'
                     }`}
                     title={v}

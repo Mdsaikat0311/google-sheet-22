@@ -8,11 +8,10 @@ import {
   LogOut,
   X,
   Truck,
-  TrendingUp,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 
-export type MainTabType = 'home' | 'orders' | 'steadfast' | 'reports' | 'profit' | 'sheet';
+export type MainTabType = 'home' | 'orders' | 'steadfast' | 'reports' | 'sheet';
 
 interface SidebarProps {
   activeTab: MainTabType;
@@ -69,12 +68,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'রিপোর্ট',
       sublabel: 'Reports',
       icon: BarChart3,
-    },
-    {
-      id: 'profit' as const,
-      label: 'প্রফিট (Sheet4)',
-      sublabel: 'Live & Demo Profit',
-      icon: TrendingUp,
     },
     {
       id: 'sheet' as const,

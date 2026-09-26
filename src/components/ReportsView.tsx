@@ -57,11 +57,13 @@ import { fetchSheet1Reports, DEFAULT_SPREADSHEET_ID } from '../services/sheets';
 interface ReportsViewProps {
   spreadsheetId?: string;
   orders?: Order[];
+  listProductNames?: string[];
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({
   spreadsheetId = DEFAULT_SPREADSHEET_ID,
   orders = [],
+  listProductNames,
 }) => {
   const [sheetProducts, setSheetProducts] = useState<Sheet1ProductReport[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -298,15 +300,27 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return s.includes('part') || c === 'partial_delivered';
   };
 
-  // The 6 canonical products from Sheet2 Column H toggle button & Sheet 1
-  const SHEET2_TOGGLE_PRODUCTS = [
-    'Rose 599tk',
-    'Doll and toys',
-    'Watch 599tk',
-    'Porbash Rose 990tk',
-    'Porbash Rose 1350tk',
-    'Cutting Dispancer',
-  ] as const;
+  // The 6 canonical products from List sheet Column B, Sheet2 Column H toggle button & Sheet 1
+  const canonicalProducts = useMemo(() => {
+    if (listProductNames && listProductNames.length >= 6) {
+      return listProductNames;
+    }
+    try {
+      const saved = localStorage.getItem('sheet_list_product_names');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 6) return parsed;
+      }
+    } catch (e) {}
+    return [
+      'Rose 599',
+      'Watch 599',
+      'Doll and toys tk',
+      'Cutting Dispancer tk',
+      'Porbash Rose 990',
+      'Porbash Rose 1350',
+    ];
+  }, [listProductNames]);
 
   // Helper to match an order to a product name
   const matchesProductName = (order: Order, prodName: string): boolean => {
@@ -336,11 +350,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return false;
   };
 
-  // Master unified products list: STRICTLY AND ONLY the 6 products from Sheet 2 Column H & Sheet 1
+  // Master unified products list: STRICTLY AND ONLY the 6 products from List Sheet / Sheet 2 Column H & Sheet 1
   const unifiedProducts = useMemo(() => {
     const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    return SHEET2_TOGGLE_PRODUCTS.map((prodName, idx) => {
+    return canonicalProducts.map((prodName, idx) => {
       const pNorm = normalize(prodName);
       // Find matching real-time report from Sheet 1
       const sheetReport = sheetProducts.find((sp) => {

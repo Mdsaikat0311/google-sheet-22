@@ -25,7 +25,7 @@ import {
   User,
 } from 'lucide-react';
 import { Order, OrderStatus, Product, Sheet3ProductEntry } from '../types';
-import { updateOrderCardViaAppsScript, buildOrderCardPayload } from '../services/sheets';
+import { updateOrderCardViaAppsScript, buildOrderCardPayload, getStoredListProductNames } from '../services/sheets';
 import { groupItemsByDate } from '../utils/dateGrouping';
 
 /**
@@ -57,30 +57,25 @@ export const matchesProductFilter = (order: Order, filter: string): boolean => {
   const pNorm = normalize(filter);
   const oNorm = normalize(order.product || '');
 
-  // Priority 1: Match with Column H (variant toggle)
-  if (vNorm && vNorm !== 'nosellect' && vNorm !== 'noselect') {
-    if (vNorm === pNorm) return true;
-    if (pNorm.includes('599') && !vNorm.includes('599')) return false;
-    if (pNorm.includes('990') && !vNorm.includes('990')) return false;
-    if (pNorm.includes('1350') && !vNorm.includes('1350')) return false;
-    if (vNorm.includes(pNorm) || pNorm.includes(vNorm)) return true;
-    if (pNorm.includes('watch') && (vNorm.includes('watch') || vNorm.includes('golden'))) return true;
-    if (pNorm.includes('rose') && vNorm.includes('rose') && !vNorm.includes('990') && !vNorm.includes('1350')) return true;
-    if (pNorm.includes('doll') && (vNorm.includes('doll') || vNorm.includes('toy'))) return true;
-    if (pNorm.includes('dispancer') && (vNorm.includes('dispan') || vNorm.includes('cutt') || vNorm.includes('disp'))) return true;
-  }
+  // Exact normalized match with variant or product
+  if (vNorm === pNorm || oNorm === pNorm) return true;
+  if (vNorm && (vNorm.includes(pNorm) || pNorm.includes(vNorm))) return true;
+  if (oNorm && (oNorm.includes(pNorm) || pNorm.includes(oNorm))) return true;
 
-  // Priority 2: Fallback to order.product only if Column H was not selected
-  if (oNorm && oNorm !== 'nosellect' && oNorm !== 'noselect') {
-    if (oNorm === pNorm) return true;
-    if (pNorm.includes('599') && !oNorm.includes('599') && !pNorm.includes('doll') && !pNorm.includes('dispancer')) return false;
-    if (pNorm.includes('990') && !oNorm.includes('990')) return false;
-    if (pNorm.includes('1350') && !oNorm.includes('1350')) return false;
-    if (pNorm.includes('doll') && (oNorm.includes('doll') || oNorm.includes('toy'))) return true;
-    if (pNorm.includes('dispancer') && (oNorm.includes('dispan') || oNorm.includes('cutt') || oNorm.includes('disp'))) return true;
-    if (pNorm.includes('watch') && (oNorm.includes('watch') || oNorm.includes('golden'))) return true;
-    if (pNorm.includes('rose') && oNorm.includes('rose') && !oNorm.includes('990') && !oNorm.includes('1350') && pNorm.includes('599')) return true;
-  }
+  // Smart keyword checks based on product characteristics
+  const is599Rose = pNorm.includes('599') && pNorm.includes('rose');
+  const is599Watch = pNorm.includes('599') && pNorm.includes('watch');
+  const is990 = pNorm.includes('990');
+  const is1350 = pNorm.includes('1350');
+  const isDoll = pNorm.includes('doll') || pNorm.includes('toy');
+  const isCut = pNorm.includes('cutt') || pNorm.includes('disp');
+
+  if (is599Rose && ((vNorm.includes('rose') && !vNorm.includes('990') && !vNorm.includes('1350')) || (oNorm.includes('rose') && !oNorm.includes('990') && !oNorm.includes('1350')))) return true;
+  if (is599Watch && (vNorm.includes('watch') || vNorm.includes('golden') || oNorm.includes('watch') || oNorm.includes('golden'))) return true;
+  if (is990 && (vNorm.includes('990') || oNorm.includes('990'))) return true;
+  if (is1350 && (vNorm.includes('1350') || oNorm.includes('1350'))) return true;
+  if (isDoll && (vNorm.includes('doll') || vNorm.includes('toy') || oNorm.includes('doll') || oNorm.includes('toy'))) return true;
+  if (isCut && (vNorm.includes('disp') || vNorm.includes('cutt') || oNorm.includes('disp') || oNorm.includes('cutt'))) return true;
 
   return false;
 };
@@ -125,6 +120,7 @@ export interface OrdersViewProps {
     }
   ) => Promise<boolean | void> | void;
   onDeleteOrder?: (order: Order) => void;
+  listProductNames?: string[];
 }
 
 type DropdownType = 'variant' | 'source' | 'status';
@@ -145,6 +141,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   onUpdateCustomerDetails,
   onUpdateFullOrder,
   onDeleteOrder,
+  listProductNames,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -364,30 +361,29 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     };
   };
 
-  // Strictly the 6 products from Column H of Google Sheet + All Products + No Sellect
-  const productFilterTabs = useMemo(() => [
-    { id: 'ALL', label: 'All Products' },
-    { id: 'Rose 599tk', label: 'Rose 599tk' },
-    { id: 'Doll and toys', label: 'Doll and toys' },
-    { id: 'Watch 599tk', label: 'Watch 599tk' },
-    { id: 'Porbash Rose 990tk', label: 'Porbash Rose 990tk' },
-    { id: 'Porbash Rose 1350tk', label: 'Porbash Rose 1350tk' },
-    { id: 'Cutting Dispancer', label: 'Cutting Dispancer' },
-    { id: 'NO_SELLECT', label: 'No Sellect' },
-  ], []);
+  // Strictly the 6 products from List Sheet Column B + All Products + No Sellect
+  const productFilterTabs = useMemo(() => {
+    const list =
+      listProductNames && listProductNames.length >= 6
+        ? listProductNames.slice(0, 6)
+        : getStoredListProductNames();
+
+    return [
+      { id: 'ALL', label: 'All Products' },
+      ...list.map((name) => ({ id: name, label: name })),
+      { id: 'NO_SELLECT', label: 'No Sellect' },
+    ];
+  }, [listProductNames]);
 
   // Order counts per product
   const productCounts = useMemo(() => {
     const counts: Record<string, number> = {
       ALL: orders.length,
-      'Rose 599tk': 0,
-      'Doll and toys': 0,
-      'Watch 599tk': 0,
-      'Porbash Rose 990tk': 0,
-      'Porbash Rose 1350tk': 0,
-      'Cutting Dispancer': 0,
       NO_SELLECT: 0,
     };
+    productFilterTabs.forEach((tab) => {
+      counts[tab.id] = 0;
+    });
 
     orders.forEach((order) => {
       if (matchesProductFilter(order, 'NO_SELLECT')) {
@@ -476,16 +472,15 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     });
   }, [orders, selectedProductFilter, searchQuery, activeFilter]);
 
-  // Column H (Variant) options - strictly Google Sheet Column H 6 products + No Sellect
-  const availableVariants = [
-    'No Sellect',
-    'Rose 599tk',
-    'Doll and toys',
-    'Watch 599tk',
-    'Porbash Rose 990tk',
-    'Porbash Rose 1350tk',
-    'Cutting Dispancer',
-  ];
+  // Column H (Variant) options - strictly List Sheet Column B 6 products + No Sellect
+  const availableVariants = useMemo(() => {
+    const list =
+      listProductNames && listProductNames.length >= 6
+        ? listProductNames.slice(0, 6)
+        : getStoredListProductNames();
+
+    return ['No Sellect', ...list];
+  }, [listProductNames]);
 
   // Column I (Source) options - verified from Google Sheet
   const availableSources = [

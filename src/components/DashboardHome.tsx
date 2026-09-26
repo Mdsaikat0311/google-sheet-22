@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Package,
   RefreshCw,
   Boxes,
 } from 'lucide-react';
 import { Order, OrderStatus, Product, StockMovementLog, Sheet3ProductEntry } from '../types';
+import { fetchListSheetProductNames } from '../services/sheets';
 import { StockManagerHome } from './StockManagerHome';
 import { OrderCalendar } from './OrderCalendar';
 
@@ -27,6 +28,10 @@ interface DashboardHomeProps {
   onAddSheet3Entry?: (entry: Omit<Sheet3ProductEntry, 'rowIndex' | 'id'>) => Promise<void> | void;
   onRefreshSheet3?: () => void;
   isRefreshingSheet3?: boolean;
+  // Dynamic Realtime Product Names from List Sheet Column B
+  spreadsheetId?: string;
+  accessToken?: string | null;
+  listProductNames?: string[];
 }
 
 export const DashboardHome: React.FC<DashboardHomeProps> = ({
@@ -45,59 +50,127 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   onAddSheet3Entry,
   onRefreshSheet3,
   isRefreshingSheet3,
+  spreadsheetId,
+  accessToken,
+  listProductNames,
 }) => {
-  // The user's exact 6 products (Sheet 3 Columns A to F / Column H)
+  // Real-time 6 Product names loaded from 'List' Sheet Column B
+  const [dynamicProductNames, setDynamicProductNames] = useState<string[]>(() => {
+    if (listProductNames && listProductNames.length >= 6) return listProductNames;
+    try {
+      const saved = localStorage.getItem('sheet_list_product_names');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length >= 6) return parsed;
+      }
+    } catch (e) {}
+    return [
+      'Rose 599',
+      'Watch 599',
+      'Doll and toys tk',
+      'Cutting Dispancer tk',
+      'Porbash Rose 990',
+      'Porbash Rose 1350',
+    ];
+  });
+  const [isLoadingListNames, setIsLoadingListNames] = useState<boolean>(false);
+
+  // Sync state when parent provides updated listProductNames
+  useEffect(() => {
+    if (listProductNames && listProductNames.length >= 6) {
+      setDynamicProductNames(listProductNames);
+    }
+  }, [listProductNames]);
+
+  // Fetch real-time names directly from 'List' sheet Column B
+  const loadListNames = useCallback(async () => {
+    setIsLoadingListNames(true);
+    try {
+      const names = await fetchListSheetProductNames(spreadsheetId, accessToken);
+      if (names && names.length > 0) {
+        setDynamicProductNames(names);
+        localStorage.setItem('sheet_list_product_names', JSON.stringify(names));
+      }
+    } catch (err) {
+      console.warn('Failed to load List product names:', err);
+    } finally {
+      setIsLoadingListNames(false);
+    }
+  }, [spreadsheetId, accessToken]);
+
+  // Initial load and sync on mount / spreadsheet change
+  useEffect(() => {
+    loadListNames();
+  }, [loadListNames]);
+
+  // When global sync occurs, also refresh the List sheet names
+  useEffect(() => {
+    if (!isSyncing) {
+      loadListNames();
+    }
+  }, [isSyncing, loadListNames]);
+
+  // The 6 products configuration matching List sheet order (Row 1 to Row 6 in Column B)
   const SIX_PRODUCTS_CONFIG = [
     {
       key: 'rose',
-      name: 'Rose 599tk',
+      name: 'Rose 599',
       cell: 'A3',
       matchKeys: ['rose', '599'],
       fallbackStock: 18,
     },
     {
       key: 'watch',
-      name: 'Watch 599tk',
+      name: 'Watch 599',
       cell: 'B3',
-      matchKeys: ['watch', 'golden'],
+      matchKeys: ['watch', 'golden', 'ঘড়ি'],
       fallbackStock: 24,
     },
     {
+      key: 'doll',
+      name: 'Doll and toys tk',
+      cell: 'F3',
+      matchKeys: ['doll', 'toy', 'খেলনা'],
+      fallbackStock: 4,
+    },
+    {
       key: 'cutting',
-      name: 'Cutting Dispancer',
+      name: 'Cutting Dispancer tk',
       cell: 'C3',
       matchKeys: ['cutting', 'dispancer'],
       fallbackStock: 2,
     },
     {
       key: '990',
-      name: 'Porbash Rose 990tk',
+      name: 'Porbash Rose 990',
       cell: 'D3',
       matchKeys: ['990', 'probash 990', 'porbash rose 990'],
       fallbackStock: 15,
     },
     {
       key: '1350',
-      name: 'Porbash Rose 1350tk',
+      name: 'Porbash Rose 1350',
       cell: 'E3',
       matchKeys: ['1350', 'probash 1350', 'porbash rose 1350'],
       fallbackStock: 8,
     },
-    {
-      key: 'doll',
-      name: 'Doll and toys',
-      cell: 'F3',
-      matchKeys: ['doll', 'toy'],
-      fallbackStock: 4,
-    },
   ];
 
-  const displayProducts = SIX_PRODUCTS_CONFIG.map((cfg) => {
+  const displayProducts = SIX_PRODUCTS_CONFIG.map((cfg, idx) => {
+    // Exact real-time product name from 'List' sheet Column B
+    const realTimeName = (dynamicProductNames && dynamicProductNames[idx]) || cfg.name;
+    const nameNorm = realTimeName.toLowerCase();
+
     let stock = cfg.fallbackStock;
     if (sheet3Entries && sheet3Entries.length > 0) {
       const match = sheet3Entries.find((entry) => {
         const pName = (entry.productName || '').toLowerCase();
-        return cfg.matchKeys.some((k) => pName.includes(k));
+        return (
+          pName === nameNorm ||
+          pName.includes(nameNorm) ||
+          nameNorm.includes(pName) ||
+          cfg.matchKeys.some((k) => pName.includes(k))
+        );
       });
       if (match && match.currentStock !== undefined && !isNaN(Number(match.currentStock))) {
         stock = Number(match.currentStock);
@@ -105,7 +178,12 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     } else {
       const match = products.find((p) => {
         const pName = (p.name || '').toLowerCase();
-        return cfg.matchKeys.some((k) => pName.includes(k));
+        return (
+          pName === nameNorm ||
+          pName.includes(nameNorm) ||
+          nameNorm.includes(pName) ||
+          cfg.matchKeys.some((k) => pName.includes(k))
+        );
       });
       if (match && match.stock !== undefined) {
         stock = match.stock;
@@ -113,7 +191,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     }
 
     return {
-      name: cfg.name,
+      name: realTimeName,
       cell: cfg.cell,
       stock,
     };
@@ -152,11 +230,22 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
             পণ্য স্টক কার্ড (৬টি প্রোডাক্টের লাইভ স্টক - Sheet 3)
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold font-mono">
-            Sheet 3 Live Sync
-          </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadListNames}
+            disabled={isLoadingListNames}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#141824] hover:bg-[#1e2436] border border-[#232b3e] text-[10px] sm:text-[11px] text-gray-300 hover:text-pink-300 transition-colors font-siliguri"
+            title="List শিট কলাম B থেকে ৬টি নাম পুনরায় লোড করুন"
+          >
+            <RefreshCw className={`w-3 h-3 text-pink-400 ${isLoadingListNames ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">নাম সিঙ্ক</span>
+          </button>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold font-mono">
+              List (Col B) & Sheet 3 Live
+            </span>
+          </div>
         </div>
       </div>
 
@@ -242,6 +331,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
       <OrderCalendar
         orders={orders}
         onSelectOrder={onSelectOrder}
+        listProductNames={dynamicProductNames}
       />
 
       {/* Stock Management & Cancel/Return Approval Section */}
@@ -258,6 +348,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           onAddSheet3Entry={onAddSheet3Entry}
           onRefreshSheet3={onRefreshSheet3}
           isRefreshingSheet3={isRefreshingSheet3}
+          listProductNames={dynamicProductNames}
         />
       </div>
     </div>

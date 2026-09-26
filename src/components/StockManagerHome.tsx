@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Check,
   CheckCircle2,
@@ -26,15 +26,16 @@ import {
 } from 'lucide-react';
 import { Product, Order, StockMovementLog, Sheet3ProductEntry } from '../types';
 import { groupItemsByDate } from '../utils/dateGrouping';
+import { getStoredListProductNames } from '../services/sheets';
 
-// The exact 6 primary products configured in Google Sheet 3
+// The fallback 6 primary products configured in List Sheet / Google Sheet 3
 export const SHEET3_PRIMARY_PRODUCTS: string[] = [
-  'Rose 599tk',
-  'Golden Watch Combo',
-  'Doll and toys',
-  'Cutting Dispancer',
-  'Porbash Rose 990tk',
-  'Porbash Rose 1350tk',
+  'Rose 599',
+  'Watch 599',
+  'Doll and toys tk',
+  'Cutting Dispancer tk',
+  'Porbash Rose 990',
+  'Porbash Rose 1350',
 ];
 
 interface StockManagerHomeProps {
@@ -49,6 +50,7 @@ interface StockManagerHomeProps {
   onAddSheet3Entry?: (entry: Omit<Sheet3ProductEntry, 'rowIndex' | 'id'>) => Promise<void> | void;
   onRefreshSheet3?: () => void;
   isRefreshingSheet3?: boolean;
+  listProductNames?: string[];
 }
 
 // Helper to reliably format both Date and Time
@@ -109,6 +111,7 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
   onAddSheet3Entry,
   onRefreshSheet3,
   isRefreshingSheet3 = false,
+  listProductNames,
 }) => {
   // Pagination states: Show 5 cards at a time, expand by +5 with "Show More"
   const [visibleProductsCount, setVisibleProductsCount] = useState<number>(5);
@@ -342,8 +345,47 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
     }
   };
 
-  // Strictly the exact 6 primary products configured in Google Sheet
-  const allAvailableProducts = SHEET3_PRIMARY_PRODUCTS;
+  // Strictly the exact 6 primary products from List Sheet Column B
+  const allAvailableProducts = useMemo(() => {
+    if (listProductNames && listProductNames.length >= 6) {
+      return listProductNames.slice(0, 6);
+    }
+    return getStoredListProductNames();
+  }, [listProductNames]);
+
+  // Maps any legacy or variant name to the dynamic real-time name from List sheet Column B
+  const getMappedProductName = (rawName?: string): string => {
+    if (!rawName) return 'No Sellect';
+    const norm = rawName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!norm || norm === 'nosellect' || norm === 'noselect') return 'No Sellect';
+
+    // Direct match against current 6 names
+    for (const name of allAvailableProducts) {
+      if (name.toLowerCase().replace(/[^a-z0-9]/g, '') === norm) return name;
+    }
+
+    // Map by canonical index (0 to 5)
+    if (norm.includes('599') && norm.includes('rose') && !norm.includes('990') && !norm.includes('1350')) {
+      return allAvailableProducts[0] || rawName;
+    }
+    if ((norm.includes('599') && norm.includes('watch')) || norm.includes('golden')) {
+      return allAvailableProducts[1] || rawName;
+    }
+    if (norm.includes('doll') || norm.includes('toy')) {
+      return allAvailableProducts[2] || rawName;
+    }
+    if (norm.includes('disp') || norm.includes('cutt')) {
+      return allAvailableProducts[3] || rawName;
+    }
+    if (norm.includes('990')) {
+      return allAvailableProducts[4] || rawName;
+    }
+    if (norm.includes('1350')) {
+      return allAvailableProducts[5] || rawName;
+    }
+
+    return rawName;
+  };
 
   // Filter & Search Sheet 3 Entries
   const hasSheet3Data = sheet3Entries && sheet3Entries.length > 0;
@@ -363,10 +405,12 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
     const matchesProduct =
       productFilter === 'all' ||
       !productFilter ||
-      (entry.productName &&
-        (entry.productName.toLowerCase().trim() === productFilter.toLowerCase().trim() ||
-          entry.productName.toLowerCase().includes(productFilter.toLowerCase().trim()) ||
-          productFilter.toLowerCase().includes(entry.productName.toLowerCase().trim())));
+      (productFilter === 'No Sellect'
+        ? (!entry.productName || entry.productName.toLowerCase().includes('no sellect'))
+        : (entry.productName &&
+            (entry.productName.toLowerCase().trim() === productFilter.toLowerCase().trim() ||
+              entry.productName.toLowerCase().includes(productFilter.toLowerCase().trim()) ||
+              productFilter.toLowerCase().includes(entry.productName.toLowerCase().trim()))));
 
     return matchesSearch && matchesSource && matchesProduct;
   });
@@ -381,9 +425,11 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
     const matchesProduct =
       productFilter === 'all' ||
       !productFilter ||
-      product.name.toLowerCase().trim() === productFilter.toLowerCase().trim() ||
-      product.name.toLowerCase().includes(productFilter.toLowerCase().trim()) ||
-      productFilter.toLowerCase().includes(product.name.toLowerCase().trim());
+      (productFilter === 'No Sellect'
+        ? (!product.name || product.name.toLowerCase().includes('no sellect'))
+        : (product.name.toLowerCase().trim() === productFilter.toLowerCase().trim() ||
+            product.name.toLowerCase().includes(productFilter.toLowerCase().trim()) ||
+            productFilter.toLowerCase().includes(product.name.toLowerCase().trim())));
 
     return matchesSearch && matchesProduct;
   });
@@ -422,6 +468,9 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
                       {p}
                     </option>
                   ))}
+                  <option value="No Sellect" className="bg-[#12151f] text-yellow-300">
+                    No Sellect
+                  </option>
                 </select>
                 {productFilter !== 'all' && (
                   <button
@@ -610,7 +659,7 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
                               <Package className="w-3 h-3" />
                             </div>
                             <h4 className="font-bold text-white text-xs sm:text-sm font-mono truncate leading-tight flex-1">
-                              {entry.productName}
+                              {getMappedProductName(entry.productName)}
                             </h4>
                           </div>
 
@@ -836,7 +885,7 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
 
                 {/* 6 Product Toggle Buttons */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                  {SHEET3_PRIMARY_PRODUCTS.map((pName) => {
+                  {allAvailableProducts.map((pName) => {
                     const isSelected =
                       editProductName.trim().toLowerCase() === pName.trim().toLowerCase();
                     return (
@@ -1151,7 +1200,7 @@ export const StockManagerHome: React.FC<StockManagerHomeProps> = ({
                 </label>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-1">
-                  {SHEET3_PRIMARY_PRODUCTS.map((pName) => {
+                  {allAvailableProducts.map((pName) => {
                     const isSelected =
                       sheet3NewProductName.trim().toLowerCase() === pName.trim().toLowerCase();
                     return (

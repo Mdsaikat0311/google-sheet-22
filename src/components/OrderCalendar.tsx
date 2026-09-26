@@ -11,18 +11,21 @@ import {
   ListFilter,
 } from 'lucide-react';
 import { Order } from '../types';
+import { getStoredListProductNames } from '../services/sheets';
 import { parseAnyDateToTimestamp } from '../utils/dateGrouping';
 
 interface OrderCalendarProps {
   orders: Order[];
   onSelectDate?: (dateStr: string) => void;
   onSelectOrder?: (order: Order) => void;
+  listProductNames?: string[];
 }
 
 export const OrderCalendar: React.FC<OrderCalendarProps> = ({
   orders,
   onSelectDate,
   onSelectOrder,
+  listProductNames,
 }) => {
   // Calendar month/year navigation state
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date());
@@ -47,15 +50,60 @@ export const OrderCalendar: React.FC<OrderCalendarProps> = ({
     setSelectedDayKey(dayKey);
   };
 
-  // Distinct products from orders for filtering
+  // Strictly the 6 products from List sheet Column B (no extra random names from orders)
   const availableProducts = useMemo(() => {
-    const set = new Set<string>();
-    orders.forEach((o) => {
-      const p = (o.variant && o.variant !== 'No Sellect' ? o.variant : o.product) || '';
-      if (p.trim()) set.add(p.trim());
-    });
-    return Array.from(set);
-  }, [orders]);
+    if (listProductNames && listProductNames.length >= 6) {
+      return listProductNames.slice(0, 6);
+    }
+    return getStoredListProductNames();
+  }, [listProductNames]);
+
+  // Map any order variant or product string to the canonical 6 List product names or No Sellect
+  const getMappedProductName = (rawVariant?: string, rawProduct?: string): string => {
+    const vRaw = (rawVariant || '').trim();
+    const pRaw = (rawProduct || '').trim();
+    const vNorm = vRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const pNorm = pRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const isNoSellect =
+      !vRaw ||
+      vRaw === 'No Sellect' ||
+      vNorm === 'nosellect' ||
+      vNorm === 'noselect' ||
+      vRaw.toLowerCase().includes('no sellect');
+
+    if (isNoSellect) return 'No Sellect';
+
+    // Direct match against 6 current names
+    for (const name of availableProducts) {
+      const nNorm = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (vNorm === nNorm || pNorm === nNorm) return name;
+    }
+
+    // Map by canonical index (0 to 5)
+    if ((vNorm.includes('599') && vNorm.includes('rose')) || (pNorm.includes('599') && pNorm.includes('rose'))) {
+      if (!vNorm.includes('990') && !vNorm.includes('1350') && !pNorm.includes('990') && !pNorm.includes('1350')) {
+        return availableProducts[0] || vRaw || pRaw;
+      }
+    }
+    if ((vNorm.includes('599') && vNorm.includes('watch')) || vNorm.includes('golden') || (pNorm.includes('599') && pNorm.includes('watch')) || pNorm.includes('golden')) {
+      return availableProducts[1] || vRaw || pRaw;
+    }
+    if (vNorm.includes('doll') || vNorm.includes('toy') || pNorm.includes('doll') || pNorm.includes('toy')) {
+      return availableProducts[2] || vRaw || pRaw;
+    }
+    if (vNorm.includes('disp') || vNorm.includes('cutt') || pNorm.includes('disp') || pNorm.includes('cutt')) {
+      return availableProducts[3] || vRaw || pRaw;
+    }
+    if (vNorm.includes('990') || pNorm.includes('990')) {
+      return availableProducts[4] || vRaw || pRaw;
+    }
+    if (vNorm.includes('1350') || pNorm.includes('1350')) {
+      return availableProducts[5] || vRaw || pRaw;
+    }
+
+    return vRaw || pRaw || 'No Sellect';
+  };
 
   // Map orders by YYYY-MM-DD
   const { dateOrderMap, totalOrdersCount, activeDateList } = useMemo(() => {
@@ -63,13 +111,54 @@ export const OrderCalendar: React.FC<OrderCalendarProps> = ({
     let totalCount = 0;
 
     orders.forEach((order) => {
-      // Check product filter
-      const prodName = (order.variant && order.variant !== 'No Sellect' ? order.variant : order.product) || '';
+      // Check product filter strictly against 6 List products or NO_SELLECT
+      const vRaw = (order.variant || '').trim();
+      const pRaw = (order.product || '').trim();
+      const vNorm = vRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const pNorm = pRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const isNoSellect =
+        !vRaw ||
+        vRaw === 'No Sellect' ||
+        vRaw.toLowerCase().includes('no sellect') ||
+        vNorm === 'nosellect' ||
+        vNorm === 'noselect';
+
       if (productFilter !== 'ALL') {
-        const match =
-          prodName.toLowerCase().includes(productFilter.toLowerCase()) ||
-          productFilter.toLowerCase().includes(prodName.toLowerCase());
-        if (!match) return;
+        if (productFilter === 'NO_SELLECT') {
+          if (!isNoSellect) return;
+        } else {
+          if (isNoSellect) return;
+
+          const filterNorm = productFilter.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+          // Check direct matches
+          let matched =
+            vNorm === filterNorm ||
+            pNorm === filterNorm ||
+            vNorm.includes(filterNorm) ||
+            filterNorm.includes(vNorm) ||
+            pNorm.includes(filterNorm) ||
+            filterNorm.includes(pNorm);
+
+          // Smart category match
+          if (!matched) {
+            const is599Rose = filterNorm.includes('599') && filterNorm.includes('rose');
+            const is599Watch = filterNorm.includes('599') && filterNorm.includes('watch');
+            const is990 = filterNorm.includes('990');
+            const is1350 = filterNorm.includes('1350');
+            const isDoll = filterNorm.includes('doll') || filterNorm.includes('toy');
+            const isCut = filterNorm.includes('cutt') || filterNorm.includes('disp');
+
+            if (is599Rose && (vNorm.includes('rose') || pNorm.includes('rose')) && !vNorm.includes('990') && !vNorm.includes('1350') && !pNorm.includes('990') && !pNorm.includes('1350')) matched = true;
+            else if (is599Watch && (vNorm.includes('watch') || pNorm.includes('watch') || vNorm.includes('golden') || pNorm.includes('golden'))) matched = true;
+            else if (is990 && (vNorm.includes('990') || pNorm.includes('990'))) matched = true;
+            else if (is1350 && (vNorm.includes('1350') || pNorm.includes('1350'))) matched = true;
+            else if (isDoll && (vNorm.includes('doll') || vNorm.includes('toy') || pNorm.includes('doll') || pNorm.includes('toy'))) matched = true;
+            else if (isCut && (vNorm.includes('disp') || vNorm.includes('cutt') || pNorm.includes('disp') || pNorm.includes('cutt'))) matched = true;
+          }
+
+          if (!matched) return;
+        }
       }
 
       const raw = order.rawDate || order.date;
@@ -95,7 +184,7 @@ export const OrderCalendar: React.FC<OrderCalendarProps> = ({
       existing.totalAmount += Number(order.amount || order.total || 0);
       existing.orders.push(order);
 
-      const pKey = prodName || 'Unknown';
+      const pKey = getMappedProductName(order.variant, order.product);
       existing.productBreakdown[pKey] = (existing.productBreakdown[pKey] || 0) + 1;
 
       map.set(key, existing);
@@ -107,7 +196,7 @@ export const OrderCalendar: React.FC<OrderCalendarProps> = ({
     });
 
     return { dateOrderMap: map, totalOrdersCount: totalCount, activeDateList: sortedList };
-  }, [orders, productFilter]);
+  }, [orders, productFilter, availableProducts]);
 
   // Calendar grid math
   const year = currentDate.getFullYear();
@@ -328,13 +417,16 @@ export const OrderCalendar: React.FC<OrderCalendarProps> = ({
               title="প্রোডাক্ট ফিল্টার"
             >
               <option value="ALL" className="bg-[#12151f] text-gray-200">
-                সকল প্রোডাক্ট
+                সকল প্রোডাক্ট (All Products)
               </option>
               {availableProducts.map((p) => (
                 <option key={p} value={p} className="bg-[#12151f] text-white">
                   {p}
                 </option>
               ))}
+              <option value="NO_SELLECT" className="bg-[#12151f] text-yellow-300">
+                No Sellect
+              </option>
             </select>
           </div>
 

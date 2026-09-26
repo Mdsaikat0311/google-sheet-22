@@ -3944,3 +3944,112 @@ export const fetchSheet4ProfitData = async (
   };
 };
 
+/**
+ * Fetch the 6 real-time product names from 'List' sheet Column B
+ * Automatically strips header row and returns the 6 dynamic product names
+ */
+export const fetchListSheetProductNames = async (
+  spreadsheetId: string = DEFAULT_SPREADSHEET_ID,
+  accessToken?: string | null
+): Promise<string[]> => {
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+  const targetTab = 'List';
+
+  // 1. If accessToken is provided, try direct Sheets API first
+  if (accessToken) {
+    try {
+      const range = `'${targetTab}'!B1:B20`;
+      const res = await fetch(
+        `${SHEETS_API_BASE}/${cleanId}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rawValues: string[][] = data.values || [];
+        const names: string[] = [];
+        for (let i = 0; i < rawValues.length; i++) {
+          const val = String(rawValues[i]?.[0] || '').trim();
+          if (!val) continue;
+          // Skip header row if it matches "update name" or "product" or "name"
+          if (i === 0 && /update\s*name|product\s*name|name|header/i.test(val)) {
+            continue;
+          }
+          names.push(val);
+        }
+        if (names.length >= 1) {
+          return names.slice(0, 6);
+        }
+      }
+    } catch (e) {
+      console.warn('OAuth direct fetch of List sheet failed, trying gviz:', e);
+    }
+  }
+
+  // 2. Fetch via gviz endpoint (public or published) with cache-busting timestamp
+  const gvizUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(targetTab)}&_t=${Date.now()}`;
+  try {
+    const res = await fetch(gvizUrl, { cache: 'no-store' });
+    if (res.ok) {
+      const text = await res.text();
+      const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
+        if (data.table && data.table.rows && Array.isArray(data.table.rows)) {
+          const names: string[] = [];
+          data.table.rows.forEach((rowObj: any, idx: number) => {
+            const c = rowObj.c || [];
+            // Column B is index 1
+            const cellVal =
+              c[1]?.v !== null && c[1]?.v !== undefined
+                ? String(c[1]?.v).trim()
+                : c[1]?.f
+                ? String(c[1]?.f).trim()
+                : '';
+            if (!cellVal) return;
+            // Skip header if on row 0 and contains "update name" or "name"
+            if (idx === 0 && /update\s*name|product\s*name|header/i.test(cellVal)) {
+              return;
+            }
+            names.push(cellVal);
+          });
+          if (names.length >= 1) {
+            return names.slice(0, 6);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch List sheet via gviz:', err);
+  }
+
+  // Fallback to default 6 products matching List sheet structure
+  return getStoredListProductNames();
+};
+
+/**
+ * Retrieve saved 6 product names from local storage or return current default List sheet names
+ */
+export const getStoredListProductNames = (): string[] => {
+  try {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('sheet_list_product_names') : null;
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length >= 6) {
+        return parsed.slice(0, 6);
+      }
+    }
+  } catch (e) {}
+
+  return [
+    'Rose 599',
+    'Watch 599',
+    'Doll and toys tk',
+    'Cutting Dispancer tk',
+    'Porbash Rose 990',
+    'Porbash Rose 1350',
+  ];
+};
