@@ -2731,33 +2731,64 @@ export const fetchSheet1Reports = async (
       return '';
     };
 
-    // Find all product header columns (starts where label has Lead: or tk or product indicators)
+    // Find all product anchor blocks across columns and row headers
+    // In Sheet1, products appear in pairs:
+    // - Top block (starts at row 0): col 0 ("Rose 599tk"), col 9 ("Porbash Rose 990tk")
+    // - Middle block (starts at row 15): col 0 ("Watch 599tk"), col 9 ("Doll and toys")
+    // - Bottom block (starts at row 32): col 0 ("Cutting Dispancer"), col 9 ("Porbash Rose 1350tk")
+
+    interface ProductAnchor {
+      rawHeader: string;
+      colIdx: number;
+      startRow: number;
+      isColHeader: boolean;
+    }
+
+    const anchors: ProductAnchor[] = [];
+
+    // 1. Check top column headers (Row 0 / cols labels)
     for (let cIdx = 0; cIdx < cols.length; cIdx++) {
       const colLabel = String(cols[cIdx]?.label || '').trim();
-      if (!colLabel) continue;
+      if (colLabel && /Lead:\s*\d+/i.test(colLabel)) {
+        anchors.push({
+          rawHeader: colLabel,
+          colIdx: cIdx,
+          startRow: 0,
+          isColHeader: true,
+        });
+      }
+    }
 
-      // Check if this column is a product block header
-      const isProductHeader = /lead:|confirm:|del:|tk|dispancer|toys/i.test(colLabel);
-      if (!isProductHeader) continue;
+    // 2. Check embedded row headers (Rows 15, 32, etc.)
+    for (let rIdx = 1; rIdx < rows.length; rIdx++) {
+      for (let cIdx = 0; cIdx < (rows[rIdx]?.c?.length || 0); cIdx++) {
+        const val = String(rows[rIdx]?.c?.[cIdx]?.v || '').trim();
+        if (val && /Lead:\s*\d+/i.test(val)) {
+          // Avoid duplicate anchors
+          if (!anchors.some((a) => a.colIdx === cIdx && Math.abs(a.startRow - rIdx) < 5)) {
+            anchors.push({
+              rawHeader: val,
+              colIdx: cIdx,
+              startRow: rIdx,
+              isColHeader: false,
+            });
+          }
+        }
+      }
+    }
 
-      // Extract product title (before parentheses)
-      const rawTitle = colLabel.split('(')[0].trim();
-      const cleanProductName = rawTitle || colLabel;
+    for (const anchor of anchors) {
+      const rawHeader = anchor.rawHeader;
+      const cleanProductName = rawHeader.split('(')[0].trim() || rawHeader;
 
       // Extract stats from header string
-      const leadMatch = colLabel.match(/Lead:\s*(\d+)/i);
-      const confirmMatch = colLabel.match(/Confirm:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
-      const delMatch = colLabel.match(/Del:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
-      const penMatch = colLabel.match(/Pen:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
-      const partMatch = colLabel.match(/Part:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
-      const qtyMatch = colLabel.match(/Qty:\s*(\d+)/i);
-      const canMatch = colLabel.match(/Can:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
-
-      // Extract the first source label from the end of the header (e.g. Website (50.0%))
-      const firstSourceMatch = colLabel.match(/\)\s*([A-Za-z]+(?:\s*\([\d.]*%\))?)$/);
-      const firstSourceRaw = firstSourceMatch ? firstSourceMatch[1].trim() : 'Website';
-      const firstSourceShareMatch = firstSourceRaw.match(/\(([\d.]+%)\)/);
-      const firstSourceName = firstSourceRaw.replace(/\s*\([\d.]*%\)/, '').trim();
+      const leadMatch = rawHeader.match(/Lead:\s*(\d+)/i);
+      const confirmMatch = rawHeader.match(/Confirm:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
+      const delMatch = rawHeader.match(/Del:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
+      const penMatch = rawHeader.match(/Pen:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
+      const partMatch = rawHeader.match(/Part:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
+      const qtyMatch = rawHeader.match(/Qty:\s*(\d+)/i);
+      const canMatch = rawHeader.match(/Can:\s*(\d+)(?:\s*\(([\d.]+%)\))?/i);
 
       const overall = {
         lead: leadMatch ? parseInt(leadMatch[1], 10) : 0,
@@ -2776,78 +2807,119 @@ export const fetchSheet1Reports = async (
 
       const sources: ProductReportSource[] = [];
 
-      // Source 1 (Website) from Row 0
-      const s1Lead = parseCountAndRate(getCellValue(0, cIdx + 1));
-      const s1Confirm = parseCountAndRate(getCellValue(0, cIdx + 2));
-      const s1Del = parseCountAndRate(getCellValue(0, cIdx + 3));
-      const s1Pen = parseCountAndRate(getCellValue(0, cIdx + 4));
-      const s1Part = parseCountAndRate(getCellValue(0, cIdx + 5));
-      const s1Qty = parseCountAndRate(getCellValue(0, cIdx + 6));
-      const s1Can = parseCountAndRate(getCellValue(0, cIdx + 7));
+      if (anchor.isColHeader) {
+        // Source 1 (Website) from Row 0
+        const firstSourceMatch = rawHeader.match(/\)\s*([A-Za-z]+(?:\s*\([\d.]*%\))?)$/);
+        const firstSourceRaw = firstSourceMatch ? firstSourceMatch[1].trim() : 'Website';
+        const firstSourceShareMatch = firstSourceRaw.match(/\(([\d.]+%)\)/);
+        const firstSourceName = firstSourceRaw.replace(/\s*\([\d.]*%\)/, '').trim();
 
-      sources.push({
-        source: firstSourceRaw,
-        sourceName: firstSourceName || 'Website',
-        sharePercent: firstSourceShareMatch ? firstSourceShareMatch[1] : '0%',
-        lead: s1Lead.count,
-        confirm: s1Confirm.count,
-        confirmRate: s1Confirm.rate,
-        delivery: s1Del.count,
-        deliveryRate: s1Del.rate,
-        pending: s1Pen.count,
-        pendingRate: s1Pen.rate,
-        partial: s1Part.count,
-        partialRate: s1Part.rate,
-        quantity: s1Qty.count,
-        cancel: s1Can.count,
-        cancelRate: s1Can.rate,
-      });
+        const s1Lead = parseCountAndRate(getCellValue(0, anchor.colIdx + 1));
+        const s1Confirm = parseCountAndRate(getCellValue(0, anchor.colIdx + 2));
+        const s1Del = parseCountAndRate(getCellValue(0, anchor.colIdx + 3));
+        const s1Pen = parseCountAndRate(getCellValue(0, anchor.colIdx + 4));
+        const s1Part = parseCountAndRate(getCellValue(0, anchor.colIdx + 5));
+        const s1Qty = parseCountAndRate(getCellValue(0, anchor.colIdx + 6));
+        const s1Can = parseCountAndRate(getCellValue(0, anchor.colIdx + 7));
 
-      // Subsequent sources from rows 1..15 (to capture all 8 sources including Instagram)
-      for (let rIdx = 1; rIdx < Math.min(16, rows.length); rIdx++) {
-        const labelInCol = getCellValue(rIdx, 18) || getCellValue(rIdx, cIdx);
-        const labelStr = String(labelInCol).trim();
-        if (
-          labelStr &&
-          /Messenger|Whatsapp|INCOMPLETE|Youtube|Tiktok|Call Direct|Instagram/i.test(labelStr)
-        ) {
-          const shareMatch = labelStr.match(/\(([\d.]+%)\)/);
-          const cleanName = labelStr.replace(/\s*\([\d.]*%\)/, '').trim();
+        sources.push({
+          source: firstSourceRaw,
+          sourceName: firstSourceName || 'Website',
+          sharePercent: firstSourceShareMatch ? firstSourceShareMatch[1] : '0%',
+          lead: s1Lead.count,
+          confirm: s1Confirm.count,
+          confirmRate: s1Confirm.rate,
+          delivery: s1Del.count,
+          deliveryRate: s1Del.rate,
+          pending: s1Pen.count,
+          pendingRate: s1Pen.rate,
+          partial: s1Part.count,
+          partialRate: s1Part.rate,
+          quantity: s1Qty.count,
+          cancel: s1Can.count,
+          cancelRate: s1Can.rate,
+        });
 
-          // Data row is next row (rIdx + 1)
-          const dataRow = rIdx + 1;
-          const sLead = parseCountAndRate(getCellValue(dataRow, cIdx + 1));
-          const sConfirm = parseCountAndRate(getCellValue(dataRow, cIdx + 2));
-          const sDel = parseCountAndRate(getCellValue(dataRow, cIdx + 3));
-          const sPen = parseCountAndRate(getCellValue(dataRow, cIdx + 4));
-          const sPart = parseCountAndRate(getCellValue(dataRow, cIdx + 5));
-          const sQty = parseCountAndRate(getCellValue(dataRow, cIdx + 6));
-          const sCan = parseCountAndRate(getCellValue(dataRow, cIdx + 7));
+        // 7 subsequent sources from rows 1, 3, 5, 7, 9, 11, 13 (Messenger, Whatsapp, INCOMPLETE, Youtube, Tiktok, Call Direct, Instagram)
+        for (let rIdx = 1; rIdx <= 13; rIdx += 2) {
+          const labelInCol = getCellValue(rIdx, anchor.colIdx) || getCellValue(rIdx, 0);
+          const labelStr = String(labelInCol).trim();
+          if (labelStr) {
+            const shareMatch = labelStr.match(/\(([\d.]+%)\)/);
+            const cleanName = labelStr.replace(/\s*\([\d.]*%\)/, '').trim();
+            const dataRow = rIdx + 1;
+            const sLead = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 1));
+            const sConfirm = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 2));
+            const sDel = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 3));
+            const sPen = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 4));
+            const sPart = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 5));
+            const sQty = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 6));
+            const sCan = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 7));
 
-          sources.push({
-            source: labelStr,
-            sourceName: cleanName,
-            sharePercent: shareMatch ? shareMatch[1] : '0%',
-            lead: sLead.count,
-            confirm: sConfirm.count,
-            confirmRate: sConfirm.rate,
-            delivery: sDel.count,
-            deliveryRate: sDel.rate,
-            pending: sPen.count,
-            pendingRate: sPen.rate,
-            partial: sPart.count,
-            partialRate: sPart.rate,
-            quantity: sQty.count,
-            cancel: sCan.count,
-            cancelRate: sCan.rate,
-          });
+            sources.push({
+              source: labelStr,
+              sourceName: cleanName,
+              sharePercent: shareMatch ? shareMatch[1] : '0%',
+              lead: sLead.count,
+              confirm: sConfirm.count,
+              confirmRate: sConfirm.rate,
+              delivery: sDel.count,
+              deliveryRate: sDel.rate,
+              pending: sPen.count,
+              pendingRate: sPen.rate,
+              partial: sPart.count,
+              partialRate: sPart.rate,
+              quantity: sQty.count,
+              cancel: sCan.count,
+              cancelRate: sCan.rate,
+            });
+          }
+        }
+      } else {
+        // Embedded anchor (Rows 15, 32, etc.)
+        // Offset 1 is Website (at startRow + 1 label, startRow + 2 data)
+        // Offsets 3, 5, 7, 9, 11, 13, 15 are the other 7 sources
+        for (let offset = 1; offset <= 15; offset += 2) {
+          const labelRow = anchor.startRow + offset;
+          const dataRow = labelRow + 1;
+          const labelInCol = getCellValue(labelRow, anchor.colIdx) || getCellValue(labelRow, 0);
+          const labelStr = String(labelInCol).trim();
+          if (labelStr) {
+            const shareMatch = labelStr.match(/\(([\d.]+%)\)/);
+            const cleanName = labelStr.replace(/\s*\([\d.]*%\)/, '').trim();
+            const sLead = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 1));
+            const sConfirm = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 2));
+            const sDel = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 3));
+            const sPen = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 4));
+            const sPart = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 5));
+            const sQty = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 6));
+            const sCan = parseCountAndRate(getCellValue(dataRow, anchor.colIdx + 7));
+
+            sources.push({
+              source: labelStr,
+              sourceName: cleanName,
+              sharePercent: shareMatch ? shareMatch[1] : '0%',
+              lead: sLead.count,
+              confirm: sConfirm.count,
+              confirmRate: sConfirm.rate,
+              delivery: sDel.count,
+              deliveryRate: sDel.rate,
+              pending: sPen.count,
+              pendingRate: sPen.rate,
+              partial: sPart.count,
+              partialRate: sPart.rate,
+              quantity: sQty.count,
+              cancel: sCan.count,
+              cancelRate: sCan.rate,
+            });
+          }
         }
       }
 
       products.push({
-        id: `PROD-REP-${cIdx}`,
+        id: `PROD-REP-${anchor.colIdx}-${anchor.startRow}`,
         productName: cleanProductName,
-        rawHeader: colLabel,
+        rawHeader,
         overall,
         sources,
       });
