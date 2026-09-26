@@ -57,27 +57,55 @@ export const matchesProductFilter = (order: Order, filter: string): boolean => {
   const pNorm = normalize(filter);
   const oNorm = normalize(order.product || '');
 
-  // Exact normalized match with variant or product
-  if (vNorm === pNorm || oNorm === pNorm) return true;
-  if (vNorm && (vNorm.includes(pNorm) || pNorm.includes(vNorm))) return true;
-  if (oNorm && (oNorm.includes(pNorm) || pNorm.includes(oNorm))) return true;
+  // Helper function to check if a normalized string belongs to the product filter category
+  const matchesCategory = (targetNorm: string): boolean => {
+    if (!targetNorm) return false;
 
-  // Smart keyword checks based on product characteristics
-  const is599Rose = pNorm.includes('599') && pNorm.includes('rose');
-  const is599Watch = pNorm.includes('599') && pNorm.includes('watch');
-  const is990 = pNorm.includes('990');
-  const is1350 = pNorm.includes('1350');
-  const isDoll = pNorm.includes('doll') || pNorm.includes('toy');
-  const isCut = pNorm.includes('cutt') || pNorm.includes('disp');
+    if (targetNorm === pNorm) return true;
+    if (targetNorm.includes(pNorm) || pNorm.includes(targetNorm)) return true;
 
-  if (is599Rose && ((vNorm.includes('rose') && !vNorm.includes('990') && !vNorm.includes('1350')) || (oNorm.includes('rose') && !oNorm.includes('990') && !oNorm.includes('1350')))) return true;
-  if (is599Watch && (vNorm.includes('watch') || vNorm.includes('golden') || oNorm.includes('watch') || oNorm.includes('golden'))) return true;
-  if (is990 && (vNorm.includes('990') || oNorm.includes('990'))) return true;
-  if (is1350 && (vNorm.includes('1350') || oNorm.includes('1350'))) return true;
-  if (isDoll && (vNorm.includes('doll') || vNorm.includes('toy') || oNorm.includes('doll') || oNorm.includes('toy'))) return true;
-  if (isCut && (vNorm.includes('disp') || vNorm.includes('cutt') || oNorm.includes('disp') || oNorm.includes('cutt'))) return true;
+    const is599Rose = pNorm.includes('599') && pNorm.includes('rose');
+    const is599Watch = pNorm.includes('599') && pNorm.includes('watch');
+    const is990 = pNorm.includes('990');
+    const is1350 = pNorm.includes('1350');
+    const isDoll = pNorm.includes('doll') || pNorm.includes('toy');
+    const isCut = pNorm.includes('cutt') || pNorm.includes('disp');
 
-  return false;
+    if (is599Rose) {
+      return targetNorm.includes('rose') && !targetNorm.includes('990') && !targetNorm.includes('1350');
+    }
+    if (is599Watch) {
+      return targetNorm.includes('watch') || targetNorm.includes('golden');
+    }
+    if (is990) {
+      return targetNorm.includes('990');
+    }
+    if (is1350) {
+      return targetNorm.includes('1350');
+    }
+    if (isDoll) {
+      return targetNorm.includes('doll') || targetNorm.includes('toy');
+    }
+    if (isCut) {
+      return targetNorm.includes('cutt') || targetNorm.includes('disp');
+    }
+
+    // Token-based matching: check if significant words in filter match target
+    const filterTokens = filter.toLowerCase().split(/\s+/).map(normalize).filter((t) => t.length >= 3 && t !== 'tk');
+    if (filterTokens.length > 0 && filterTokens.every((token) => targetNorm.includes(token))) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // If variant (Column H) is explicitly set and not No Sellect, it is authoritative
+  if (vNorm && vNorm !== 'nosellect' && vNorm !== 'noselect') {
+    return matchesCategory(vNorm);
+  }
+
+  // Fallback to order.product (Column E)
+  return matchesCategory(oNorm);
 };
 
 export interface OrdersViewProps {

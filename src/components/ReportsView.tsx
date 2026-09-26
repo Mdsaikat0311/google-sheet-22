@@ -57,12 +57,12 @@ import { fetchSheet1Reports, DEFAULT_SPREADSHEET_ID } from '../services/sheets';
 import { parseAnyDateToTimestamp } from '../utils/dateGrouping';
 
 /**
- * Accurately categorizes an order based on Sheet2 Column L (Courier Status)
- * Canonical Column L statuses:
- * 1. 'delivery': delivered, deliv, ডেলিভার্ড
- * 2. 'pending': in_review, inreview, pending, approval, পেন্ডিং
- * 3. 'partial': partial_delivered, partial, আংশিক
- * 4. 'cancel': cancelled, cancel, বাতিল, ক্যান্সেল
+ * Accurately categorizes an order based on Sheet2 Column L (Courier Status) & Column J (Status)
+ * Canonical statuses:
+ * 1. 'delivery': ONLY when status or courierStatus explicitly contains 'delivered' / 'delivery' / 'ডেলিভার্ড' (NEVER 'complete')
+ * 2. 'cancel': 'cancelled' / 'cancel' / 'বাতিল' / 'ক্যান্সেল'
+ * 3. 'partial': 'partial_delivered' / 'partial' / 'আংশিক'
+ * 4. 'pending': 'pending' / 'in_review' / 'processing' / 'hold' / empty / no status
  *
  * Ensures strictly mutually exclusive categorization so order counts NEVER have mistakes.
  */
@@ -72,60 +72,43 @@ export const getColumnLCourierStatus = (
 ): 'delivery' | 'pending' | 'partial' | 'cancel' => {
   const c = String(courierStatus || '').toLowerCase().trim();
   const cNorm = c.replace(/[\s\-_]/g, '');
+  const s = String(orderStatus || '').toLowerCase().trim();
+  const sNorm = s.replace(/[\s\-_]/g, '');
 
-  // 1. Column L: Cancel
+  // 1. Cancel: if either Column L (courier) or Column J (status) is cancelled
   if (
     cNorm.includes('cancel') ||
     c === 'cancelled' ||
     c.includes('বাতিল') ||
-    c.includes('ক্যান্সেল')
+    c.includes('ক্যান্সেল') ||
+    sNorm.includes('cancel') ||
+    s === 'cancelled' ||
+    s.includes('বাতিল') ||
+    s.includes('ক্যান্সেল')
   ) {
     return 'cancel';
   }
 
-  // 2. Column L: Partial Delivery
+  // 2. Partial Delivery: if partial delivery
   if (
     cNorm.includes('partial') ||
     c.includes('partial_delivered') ||
-    c.includes('আংশিক')
+    c.includes('আংশিক') ||
+    sNorm.includes('partial') ||
+    s.includes('আংশিক')
   ) {
     return 'partial';
   }
 
-  // 3. Column L: Delivered / Delivery
-  if (
-    (cNorm.includes('deliver') && !cNorm.includes('partial')) ||
-    c === 'delivered' ||
-    c.includes('ডেলিভার্ড')
-  ) {
+  // 3. Delivered: ONLY if status or courierStatus explicitly contains 'delivered' / 'delivery' / 'ডেলিভার্ড'
+  // Crucial requirement: "Complete" is NOT "Delivered". Only explicit delivered status is counted!
+  const isDelivC = (cNorm.includes('deliver') && !cNorm.includes('partial')) || c === 'delivered' || c.includes('ডেলিভার্ড');
+  const isDelivS = (sNorm.includes('deliver') && !sNorm.includes('partial')) || s === 'delivered' || s.includes('ডেলিভার্ড');
+  if (isDelivC || isDelivS) {
     return 'delivery';
   }
 
-  // 4. Column L: In Review / Pending
-  if (
-    cNorm.includes('inreview') ||
-    cNorm.includes('inreiw') ||
-    cNorm.includes('review') ||
-    cNorm.includes('pending') ||
-    cNorm.includes('approval') ||
-    c.includes('পেন্ডিং')
-  ) {
-    return 'pending';
-  }
-
-  // Fallback to Column J ONLY if Column L is unassigned / empty / "no sellect":
-  const s = String(orderStatus || '').toLowerCase().trim();
-  if (s.includes('cancel') || s.includes('বাতিল') || s.includes('ক্যান্সেল')) {
-    return 'cancel';
-  }
-  if (s.includes('comp') || s.includes('deliv') || s.includes('ডেলিভার্ড')) {
-    return 'delivery';
-  }
-  if (s.includes('part') || s.includes('আংশিক')) {
-    return 'partial';
-  }
-
-  // Default to pending / processing
+  // 4. Default: If not delivered, not cancelled, and not partial -> it is Pending / In Review / Processing / Empty
   return 'pending';
 };
 
@@ -152,8 +135,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   
   const [activeTab, setActiveTab] = useState<'products' | 'sources'>('products');
   
-  // Date Filtering State: 'all', 'today', 'yesterday', 'last7days', 'last30days', 'lastmonth', 'custom', or specific date
-  const [dateFilter, setDateFilter] = useState<string>('all');
+  // Date Filtering State: defaults to 'today' as requested ("ata jeno auto sob somoy today sellect hoye thake")
+  const [dateFilter, setDateFilter] = useState<string>('today');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [isDateMenuOpen, setIsDateMenuOpen] = useState(false);
@@ -241,11 +224,17 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     }
 
     const now = new Date();
+    const bdNow = new Date(now.getTime() + (6 * 60 + now.getTimezoneOffset()) * 60000);
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
     const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const bdTodayStart = new Date(bdNow.getFullYear(), bdNow.getMonth(), bdNow.getDate(), 0, 0, 0, 0);
+    const bdTodayEnd = new Date(bdNow.getFullYear(), bdNow.getMonth(), bdNow.getDate(), 23, 59, 59, 999);
 
     if (dateFilter === 'today') {
-      return orderDate >= todayStart && orderDate <= todayEnd;
+      return (
+        (orderDate >= todayStart && orderDate <= todayEnd) ||
+        (orderDate >= bdTodayStart && orderDate <= bdTodayEnd)
+      );
     }
 
     if (dateFilter === 'yesterday') {
@@ -500,7 +489,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           };
         }
         sourceMap[cleanName].lead += 1;
-        if (isConfirmed(o.status)) sourceMap[cleanName].confirm += 1;
+        if (isConfirmed(o.status, o.courierStatus)) sourceMap[cleanName].confirm += 1;
         if (isDelivered(o.status, o.courierStatus)) sourceMap[cleanName].delivery += 1;
         if (isPartial(o.status, o.courierStatus)) sourceMap[cleanName].partial += 1;
         if (isPending(o.status, o.courierStatus)) sourceMap[cleanName].pending += 1;
@@ -695,7 +684,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
       Object.entries(map).forEach(([srcName, ords]) => {
         const sLead = ords.length;
-        const sConfirm = ords.filter((o) => isConfirmed(o.status)).length;
+        const sConfirm = ords.filter((o) => isConfirmed(o.status, o.courierStatus)).length;
         const sDel = ords.filter((o) => isDelivered(o.status, o.courierStatus)).length;
         const sCan = ords.filter((o) => isCancelled(o.status, o.courierStatus)).length;
         const sPen = ords.filter((o) => isPending(o.status, o.courierStatus)).length;

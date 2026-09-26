@@ -33,58 +33,89 @@ interface SteadfastViewProps {
 
 /**
  * Helper to match an order against the product filter (ALL, 6 canonical products, NO_SELLECT)
+ * Strict matching: filters orders strictly according to the product selected in Column H (variant / Product Select).
  */
-const matchesProductFilter = (order: Order, filter: string): boolean => {
-  if (filter === 'ALL') return true;
+export const matchesProductFilter = (order: Order, filter: string): boolean => {
+  if (!filter || filter === 'ALL') return true;
 
+  const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const vRaw = (order.variant || '').trim();
+  const vNorm = normalize(vRaw);
+  const pNorm = normalize(filter);
+  const oRaw = (order.product || '').trim();
+  const oNorm = normalize(oRaw);
+
+  // Check if Column H (variant) is "No Sellect" or empty
   const isNoSellect =
-    order.variant === 'No Sellect' ||
-    !order.variant ||
-    order.variant.trim() === '' ||
-    order.product === 'No Sellect' ||
-    order.steadfastStatus === 'No Sellect';
+    !vRaw ||
+    vRaw === 'No Sellect' ||
+    vNorm === 'nosellect' ||
+    vNorm === 'noselect' ||
+    vRaw.toLowerCase().includes('no sellect');
 
+  // 1. If user selected "NO_SELLECT" tab, only return unassigned orders where Column H is No Sellect
   if (filter === 'NO_SELLECT') {
     return isNoSellect;
   }
 
-  const p = (order.product || '').toLowerCase();
-  const v = (order.variant || '').toLowerCase();
-  const f = filter.toLowerCase();
-
-  if (f.includes('watch')) {
-    return p.includes('watch') || v.includes('watch') || p.includes('golden') || v.includes('golden');
-  }
-  if (f.includes('rose 599') || (f.includes('rose') && f.includes('599'))) {
-    return (
-      (p.includes('rose') || v.includes('rose')) &&
-      !p.includes('990') &&
-      !v.includes('990') &&
-      !p.includes('1350') &&
-      !v.includes('1350')
-    );
-  }
-  if (f.includes('990')) {
-    return p.includes('990') || v.includes('990');
-  }
-  if (f.includes('1350')) {
-    return p.includes('1350') || v.includes('1350');
-  }
-  if (f.includes('doll') || f.includes('toy')) {
-    return p.includes('doll') || v.includes('doll') || p.includes('toy') || v.includes('toy');
-  }
-  if (f.includes('cutt') || f.includes('dispan') || f.includes('dispen')) {
-    return (
-      p.includes('cutt') ||
-      v.includes('cutt') ||
-      p.includes('dispan') ||
-      v.includes('dispan') ||
-      p.includes('dispen') ||
-      v.includes('dispen')
-    );
+  // 2. If user selected a specific product, any order that is "No Sellect" in Column H must NEVER be shown
+  if (isNoSellect) {
+    return false;
   }
 
-  return p.includes(f) || v.includes(f);
+  // Helper function to check if a normalized string belongs to the product filter category
+  const matchesCategory = (targetNorm: string): boolean => {
+    if (!targetNorm) return false;
+
+    // Direct exact or substring match
+    if (targetNorm === pNorm) return true;
+    if (targetNorm.includes(pNorm) || pNorm.includes(targetNorm)) return true;
+
+    // Specific product categories
+    const is599Rose = pNorm.includes('599') && pNorm.includes('rose');
+    const is599Watch = pNorm.includes('599') && pNorm.includes('watch');
+    const is990 = pNorm.includes('990');
+    const is1350 = pNorm.includes('1350');
+    const isDoll = pNorm.includes('doll') || pNorm.includes('toy');
+    const isCut = pNorm.includes('cutt') || pNorm.includes('disp');
+
+    if (is599Rose) {
+      return targetNorm.includes('rose') && !targetNorm.includes('990') && !targetNorm.includes('1350');
+    }
+    if (is599Watch) {
+      return targetNorm.includes('watch') || targetNorm.includes('golden');
+    }
+    if (is990) {
+      return targetNorm.includes('990');
+    }
+    if (is1350) {
+      return targetNorm.includes('1350');
+    }
+    if (isDoll) {
+      return targetNorm.includes('doll') || targetNorm.includes('toy');
+    }
+    if (isCut) {
+      return targetNorm.includes('cutt') || targetNorm.includes('disp');
+    }
+
+    // Token-based matching: check if significant words in filter match target
+    const filterTokens = filter.toLowerCase().split(/\s+/).map(normalize).filter((t) => t.length >= 3 && t !== 'tk');
+    if (filterTokens.length > 0 && filterTokens.every((token) => targetNorm.includes(token))) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // If order.variant (Column H - Product Select) is set and NOT No Sellect,
+  // it is the authoritative selection made for this order.
+  if (vNorm && vNorm !== 'nosellect' && vNorm !== 'noselect') {
+    return matchesCategory(vNorm);
+  }
+
+  // Fallback to order.product (Column E) only if Column H was not set
+  return matchesCategory(oNorm);
 };
 
 /**
@@ -937,6 +968,15 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
               )
             );
 
+            // Determine the actual product and source selected for this row
+            const rowProduct =
+              order.variant && order.variant !== 'No Sellect'
+                ? order.variant
+                : order.product && order.product !== 'No Sellect'
+                ? order.product
+                : (order.variant || 'No Sellect');
+            const rowSource = order.source ? String(order.source).trim() : '';
+
             return (
               <div
                 key={order.id || `order-${index}`}
@@ -947,42 +987,132 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
                     : 'border-[#232430] hover:border-[#383a4c]'
                 }`}
               >
-                {/* Line 1: Checkbox + Customer Name (on Today Entry) OR Order # & Row # on Left, Badges on Right */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
-                    {/* Touch-friendly Checkbox */}
-                    <div
-                      onClick={(e) => toggleSelectOrder(e, order.id)}
-                      className="p-1.5 -m-1 cursor-pointer shrink-0 flex items-center justify-center active:scale-90 transition-transform"
-                      title={isSelected ? 'আনসিলেক্ট' : 'সিলেক্ট করুন'}
-                    >
-                      <div
-                        className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
-                          isSelected
-                            ? 'bg-purple-600 border-purple-500 text-white shadow-xs'
-                            : 'border-gray-600 hover:border-purple-400 bg-[#1a1e2d]'
-                        }`}
-                      >
-                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                {isTodayTab ? (
+                  /* ========================================================
+                     TODAY ENTRY TAB - Dedicated Mobile-Optimized Layout
+                     Upper line: Name, Courier Status, ID number
+                     Lower line: Product, Source, Price
+                     ======================================================== */
+                  <>
+                    {/* Line 1 (Upper line): Checkbox + Name on Left, ID in Middle (Bigger), Courier Status + Tracking on Right (Bigger) */}
+                    <div className="flex items-center justify-between gap-1.5 sm:gap-2">
+                      {/* Left: Checkbox + Customer Name */}
+                      <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 shrink">
+                        {/* Touch-friendly Checkbox */}
+                        <div
+                          onClick={(e) => toggleSelectOrder(e, order.id)}
+                          className="p-1 -m-1 cursor-pointer shrink-0 flex items-center justify-center active:scale-90 transition-transform"
+                          title={isSelected ? 'আনসিলেক্ট' : 'সিলেক্ট করুন'}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                              isSelected
+                                ? 'bg-purple-600 border-purple-500 text-white shadow-xs'
+                                : 'border-gray-600 hover:border-purple-400 bg-[#1a1e2d]'
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                        </div>
+
+                        {/* Customer Name */}
+                        <span className="text-sm font-bold text-white tracking-tight truncate min-w-0 max-w-[105px] xs:max-w-[140px] sm:max-w-[190px]">
+                          {order.customerName || 'গ্রাহকের নাম নেই'}
+                        </span>
+                      </div>
+
+                      {/* Middle: ID Number - Bigger and Centered */}
+                      {!isTrackingCodeId && (
+                        <div className="flex items-center justify-center shrink-0 mx-auto px-1">
+                          <span className="text-xs sm:text-sm font-mono font-black text-gray-100 group-hover:text-purple-300 tracking-wide px-2 py-0.5 rounded-md bg-gray-800/80 border border-gray-700/60 shadow-xs">
+                            {order.id.startsWith('#') ? order.id : `#${order.id}`}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Right side: Courier Status + Tracking (Slightly Bigger) */}
+                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                        {order.courierStatus && (
+                          <span
+                            className="text-xs sm:text-xs font-bold px-2.5 py-1 rounded-md bg-purple-950/90 text-purple-200 border border-purple-700/60 shrink-0 capitalize shadow-xs"
+                            title="L কলাম: কুরিয়ার স্ট্যাটাস"
+                          >
+                            {String(order.courierStatus).trim()}
+                          </span>
+                        )}
+                        {order.trackingCode && has9DigitTrackingCode(order.trackingCode) && (
+                          <span
+                            className="text-xs sm:text-xs font-mono font-bold px-2 py-1 rounded-md bg-teal-950/80 text-[#7de3e0] border border-[#235863] shrink-0 shadow-xs"
+                            title="K কলাম: ৯ সংখ্যার ট্র্যাকিং কোড"
+                          >
+                            K: {String(order.trackingCode).trim()}
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    {/* In Today Entry tab: Customer Name placed on upper line */}
-                    {isTodayTab ? (
-                      <span className="text-sm font-bold text-white tracking-tight truncate shrink min-w-0 max-w-[150px] sm:max-w-[220px]">
-                        {order.customerName || 'গ্রাহকের নাম নেই'}
-                      </span>
-                    ) : (
-                      <>
+                    {/* Line 2 (Lower line): Product + Source on Left, Price on Right */}
+                    <div className="mt-2 pt-1 border-t border-white/[0.04] sm:border-0 sm:pt-0 flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
+                        {/* Product */}
+                        {rowProduct && (
+                          <span
+                            className="text-[10px] sm:text-xs font-mono px-1.5 py-0.5 rounded bg-purple-950/70 text-purple-300 border border-purple-800/40 shrink-0 truncate max-w-[130px] sm:max-w-none font-semibold"
+                            title="এই রো-তে সিলেক্ট করা প্রোডাক্ট"
+                          >
+                            {rowProduct}
+                          </span>
+                        )}
+
+                        {/* Source */}
+                        {rowSource && (
+                          <span
+                            className="text-[10px] sm:text-xs font-mono px-1.5 py-0.5 rounded bg-sky-950/70 text-sky-300 border border-sky-800/40 shrink-0 font-semibold"
+                            title="এই রো-তে সিলেক্ট করা সোর্স"
+                          >
+                            {rowSource}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Price on right */}
+                      <div className="shrink-0 flex items-center gap-1 sm:gap-1.5 ml-auto">
+                        <span className="text-xs sm:text-sm font-bold font-mono text-emerald-400 tracking-tight">
+                          {displayAmount}.00BDT
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-gray-500 group-hover:text-gray-400 transition-colors shrink-0" />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* ========================================================
+                     OTHER TABS (Ready for Delivery, etc.) - Preserved Layout
+                     ======================================================== */
+                  <>
+                    {/* Line 1: Checkbox + Order # on Left, Badges on Right */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
+                        {/* Touch-friendly Checkbox */}
+                        <div
+                          onClick={(e) => toggleSelectOrder(e, order.id)}
+                          className="p-1.5 -m-1 cursor-pointer shrink-0 flex items-center justify-center active:scale-90 transition-transform"
+                          title={isSelected ? 'আনসিলেক্ট' : 'সিলেক্ট করুন'}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                              isSelected
+                                ? 'bg-purple-600 border-purple-500 text-white shadow-xs'
+                                : 'border-gray-600 hover:border-purple-400 bg-[#1a1e2d]'
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                        </div>
+
                         {/* Show Order ID only if it's NOT a duplicate of Column K tracking code */}
                         {!isTrackingCodeId && (
                           <span className="text-xs font-mono font-bold text-gray-400 group-hover:text-purple-400 shrink-0">
                             {order.id.startsWith('#') ? order.id : `#${order.id}`}
-                          </span>
-                        )}
-                        {order.rowIndex && (
-                          <span className="text-[10px] text-gray-400 font-mono bg-[#1b1c24] px-1.5 py-0.5 rounded border border-[#262835] shrink-0 font-medium">
-                            Row #{order.rowIndex}
                           </span>
                         )}
                         {order.customerPhone && (
@@ -997,101 +1127,99 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
                             </button>
                           </div>
                         )}
-                      </>
-                    )}
-                  </div>
 
-                  {/* Right side: Tracking & Status badges + M Column Send Button (Visible ONLY when order is selected) */}
-                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                    {order.trackingCode && has9DigitTrackingCode(order.trackingCode) && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-950/70 text-[#7de3e0] border border-[#235863] shrink-0 font-semibold" title="K কলাম: ৯ সংখ্যার ট্র্যাকিং কোড">
-                        K: {String(order.trackingCode).trim()}
-                      </span>
-                    )}
-                    {order.courierStatus && hasValidCourierStatus(order.courierStatus) && (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-950/70 text-purple-300 border border-purple-800/40 shrink-0" title="L কলাম: কুরিয়ার স্ট্যাটাস">
-                        L: {String(order.courierStatus).trim()}
-                      </span>
-                    )}
-                    {!isTodayTab && isAlreadySent && !hasKLMatch && (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40 hidden sm:inline-block shrink-0" title="M কলামে Send করা হয়েছে, K ও L আপডেটের অপেক্ষায়">
-                        K, L অপেক্ষারত
-                      </span>
-                    )}
-                    {/* Hide M: Sent in Today Entry tab per user request */}
-                    {!isTodayTab && isAlreadySent && !isSelected && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 shrink-0" title="স্টেডফাস্টে M কলামে পাঠানো হয়েছে">
-                        <Check className="w-3 h-3 text-emerald-400 stroke-[3]" />
-                        <span>M: Sent</span>
-                      </span>
-                    )}
-                    {isSelected && (
-                      <button
-                        type="button"
-                        onClick={(e) => handleSingleSend(e, order)}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold border transition-all cursor-pointer active:scale-95 animate-fadeIn ${
-                          isAlreadySent
-                            ? 'bg-[#12281e] text-emerald-300 border-emerald-600/70 shadow-sm hover:bg-[#183528]'
-                            : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white border-purple-500 shadow-sm hover:from-purple-500 hover:to-pink-500'
-                        }`}
-                        title={
-                          isAlreadySent
-                            ? "স্টেডফাস্ট বাতিল করে M কলামে 'No Sellect' করতে ক্লিক করুন"
-                            : "গুগল শিটের M কলামে 'send to steadfast' পাঠান"
-                        }
-                      >
-                        {isAlreadySent ? (
-                          <>
+                        {/* Row Selected Product - Cleanly showing the product selected in this row */}
+                        {rowProduct && (
+                          <span
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-950/70 text-purple-300 border border-purple-800/40 shrink-0 truncate max-w-[120px] sm:max-w-none font-semibold"
+                            title="এই রো-তে সিলেক্ট করা প্রোডাক্ট"
+                          >
+                            {rowProduct}
+                          </span>
+                        )}
+
+                        {/* Row Selected Source - Cleanly showing the source selected in this row */}
+                        {rowSource && (
+                          <span
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-950/70 text-sky-300 border border-sky-800/40 shrink-0 font-semibold"
+                            title="এই রো-তে সিলেক্ট করা সোর্স"
+                          >
+                            {rowSource}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Right side: Tracking & Status badges + M Column Send Button (Visible ONLY when order is selected) */}
+                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                        {order.trackingCode && has9DigitTrackingCode(order.trackingCode) && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-950/70 text-[#7de3e0] border border-[#235863] shrink-0 font-semibold" title="K কলাম: ৯ সংখ্যার ট্র্যাকিং কোড">
+                            K: {String(order.trackingCode).trim()}
+                          </span>
+                        )}
+                        {order.courierStatus && hasValidCourierStatus(order.courierStatus) && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-950/70 text-purple-300 border border-purple-800/40 shrink-0" title="L কলাম: কুরিয়ার স্ট্যাটাস">
+                            L: {String(order.courierStatus).trim()}
+                          </span>
+                        )}
+                        {isAlreadySent && !hasKLMatch && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40 hidden sm:inline-block shrink-0" title="M কলামে Send করা হয়েছে, K ও L আপডেটের অপেক্ষায়">
+                            K, L অপেক্ষারত
+                          </span>
+                        )}
+                        {isAlreadySent && !isSelected && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 shrink-0" title="স্টেডফাস্টে M কলামে পাঠানো হয়েছে">
                             <Check className="w-3 h-3 text-emerald-400 stroke-[3]" />
                             <span>M: Sent</span>
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-3 h-3" />
-                            <span>M: Send</span>
-                          </>
+                          </span>
                         )}
-                      </button>
-                    )}
-                  </div>
-                </div>
+                        {isSelected && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleSingleSend(e, order)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold border transition-all cursor-pointer active:scale-95 animate-fadeIn ${
+                              isAlreadySent
+                                ? 'bg-[#12281e] text-emerald-300 border-emerald-600/70 shadow-sm hover:bg-[#183528]'
+                                : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white border-purple-500 shadow-sm hover:from-purple-500 hover:to-pink-500'
+                            }`}
+                            title={
+                              isAlreadySent
+                                ? "স্টেডফাস্ট বাতিল করে M কলামে 'No Sellect' করতে ক্লিক করুন"
+                                : "গুগল শিটের M কলামে 'send to steadfast' পাঠান"
+                            }
+                          >
+                            {isAlreadySent ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400 stroke-[3]" />
+                                <span>M: Sent</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3 h-3" />
+                                <span>M: Send</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-                {/* Line 2: Variant (H) & Source (I) on Left, Price on Right */}
-                <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-                  <div className="flex items-center gap-1.5 text-gray-400 font-medium flex-1 min-w-0 pr-1">
-                    {!isTodayTab && (
-                      <>
-                        <span className="text-sm sm:text-base font-bold text-white tracking-tight truncate shrink-0 max-w-[120px] sm:max-w-[180px]">
+                    {/* Line 2: Customer Name on Left, Price on Right */}
+                    <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 text-gray-400 font-medium flex-1 min-w-0 pr-1">
+                        <span className="text-sm sm:text-base font-bold text-white tracking-tight truncate shrink-0 max-w-[200px] sm:max-w-[320px]">
                           {order.customerName || 'গ্রাহকের নাম নেই'}
                         </span>
-                        <span className="text-gray-600 shrink-0">•</span>
-                      </>
-                    )}
-                    
-                    {/* Column H (Variant) from Sheet */}
-                    <span
-                      className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-950/70 text-purple-300 border border-purple-800/40 shrink-0 truncate max-w-[110px] sm:max-w-none font-semibold"
-                      title="H কলাম: ভ্যারিয়েন্ট / প্রোডাক্ট সিলেক্ট"
-                    >
-                      H: {order.variant || 'No Sellect'}
-                    </span>
+                      </div>
 
-                    {/* Column I (Source) from Sheet */}
-                    <span
-                      className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-950/70 text-sky-300 border border-sky-800/40 shrink-0 font-semibold"
-                      title="I কলাম: অর্ডার সোর্স"
-                    >
-                      I: {order.source || 'Website'}
-                    </span>
-                  </div>
-
-                  <div className="shrink-0 flex items-center gap-1.5">
-                    <span className="text-xs sm:text-sm font-bold font-mono text-white tracking-tight">
-                      {displayAmount}.00BDT
-                    </span>
-                    <ChevronRight className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors shrink-0" />
-                  </div>
-                </div>
+                      <div className="shrink-0 flex items-center gap-1.5">
+                        <span className="text-xs sm:text-sm font-bold font-mono text-white tracking-tight">
+                          {displayAmount}.00BDT
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors shrink-0" />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             );
           })

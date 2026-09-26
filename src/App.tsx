@@ -71,8 +71,8 @@ export default function App() {
   const [accessToken, setToken] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
-  // Active navigation tab (Customers & Storefront removed)
-  const [activeTab, setActiveTab] = useState<MainTabType>('home');
+  // Active navigation tab defaults to 'orders' as requested ("app dokle jeno auto sob somoy order tab ta open hoy")
+  const [activeTab, setActiveTab] = useState<MainTabType>('orders');
 
   // Mobile menu open state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
