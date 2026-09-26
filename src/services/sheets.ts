@@ -2803,13 +2803,13 @@ export const fetchSheet1Reports = async (
         cancelRate: s1Can.rate,
       });
 
-      // Subsequent sources from rows 1..12
-      for (let rIdx = 1; rIdx < Math.min(13, rows.length); rIdx++) {
+      // Subsequent sources from rows 1..15 (to capture all 8 sources including Instagram)
+      for (let rIdx = 1; rIdx < Math.min(16, rows.length); rIdx++) {
         const labelInCol = getCellValue(rIdx, 18) || getCellValue(rIdx, cIdx);
         const labelStr = String(labelInCol).trim();
         if (
           labelStr &&
-          /Messenger|Whatsapp|INCOMPLETE|Youtube|Tiktok|Call Direct/i.test(labelStr)
+          /Messenger|Whatsapp|INCOMPLETE|Youtube|Tiktok|Call Direct|Instagram/i.test(labelStr)
         ) {
           const shareMatch = labelStr.match(/\(([\d.]+%)\)/);
           const cleanName = labelStr.replace(/\s*\([\d.]*%\)/, '').trim();
@@ -4052,4 +4052,136 @@ export const getStoredListProductNames = (): string[] => {
     'Porbash Rose 990',
     'Porbash Rose 1350',
   ];
+};
+
+/**
+ * The 8 standard order sources configured in Google Sheet (Sheet1 & Sheet2)
+ */
+export const DEFAULT_SHEET_SOURCES: string[] = [
+  'Website',
+  'Messenger',
+  'Whatsapp',
+  'incomplete',
+  'Youtube',
+  'Tiktok',
+  'Call Direct',
+  'Instagram',
+];
+
+/**
+ * Retrieve saved 8 sources from local storage or return current default Google Sheet sources
+ */
+export const getStoredSheetSources = (): string[] => {
+  try {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('app_sheet_sources') : null;
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length >= 8) {
+        return parsed.slice(0, 8);
+      }
+    }
+  } catch (e) {}
+
+  return DEFAULT_SHEET_SOURCES;
+};
+
+/**
+ * Fetch the 8 real-time order sources from Google Sheet (Sheet1 or Sheet2 Column I)
+ * Automatically falls back to DEFAULT_SHEET_SOURCES and caches in localStorage
+ */
+export const fetchSheetSources = async (
+  spreadsheetId: string = DEFAULT_SPREADSHEET_ID,
+  accessToken?: string | null
+): Promise<string[]> => {
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+
+  // 1. If accessToken is provided, try direct Sheets API for Sheet1 first
+  if (accessToken) {
+    try {
+      const range = `'Sheet1'!A1:A25`;
+      const res = await fetch(
+        `${SHEETS_API_BASE}/${cleanId}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rawValues: string[][] = data.values || [];
+        const sourcesFound: string[] = ['Website'];
+        for (let i = 0; i < rawValues.length; i++) {
+          const val = String(rawValues[i]?.[0] || '').trim();
+          const match = val.match(/^([A-Za-z0-9_\s-]+?)\s*\(\d+(\.\d+)?%\)/);
+          if (match) {
+            const name = match[1].trim();
+            const clean = name.toUpperCase() === 'INCOMPLETE' ? 'incomplete' : name;
+            if (!sourcesFound.some((s) => s.toLowerCase() === clean.toLowerCase())) {
+              sourcesFound.push(clean);
+            }
+          }
+        }
+        if (sourcesFound.length >= 7) {
+          // Merge with DEFAULT_SHEET_SOURCES to guarantee all 8 are present
+          DEFAULT_SHEET_SOURCES.forEach((s) => {
+            if (!sourcesFound.some((x) => x.toLowerCase() === s.toLowerCase())) {
+              sourcesFound.push(s);
+            }
+          });
+          const result = sourcesFound.slice(0, 8);
+          try {
+            localStorage.setItem('app_sheet_sources', JSON.stringify(result));
+          } catch (e) {}
+          return result;
+        }
+      }
+    } catch (e) {
+      console.warn('OAuth direct fetch of Sheet1 sources failed:', e);
+    }
+  }
+
+  // 2. Fetch via gviz endpoint from Sheet1
+  const gvizUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/gviz/tq?tqx=out:json&sheet=Sheet1&range=A1:A25&_t=${Date.now()}`;
+  try {
+    const res = await fetch(gvizUrl, { cache: 'no-store' });
+    if (res.ok) {
+      const text = await res.text();
+      const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);/);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
+        if (data.table && data.table.rows && Array.isArray(data.table.rows)) {
+          const sourcesFound: string[] = ['Website'];
+          data.table.rows.forEach((rowObj: any) => {
+            const cellVal = String(rowObj?.c?.[0]?.v || '').trim();
+            const m = cellVal.match(/^([A-Za-z0-9_\s-]+?)\s*\(\d+(\.\d+)?%\)/);
+            if (m) {
+              const name = m[1].trim();
+              const clean = name.toUpperCase() === 'INCOMPLETE' ? 'incomplete' : name;
+              if (!sourcesFound.some((s) => s.toLowerCase() === clean.toLowerCase())) {
+                sourcesFound.push(clean);
+              }
+            }
+          });
+          if (sourcesFound.length >= 7) {
+            DEFAULT_SHEET_SOURCES.forEach((s) => {
+              if (!sourcesFound.some((x) => x.toLowerCase() === s.toLowerCase())) {
+                sourcesFound.push(s);
+              }
+            });
+            const result = sourcesFound.slice(0, 8);
+            try {
+              localStorage.setItem('app_sheet_sources', JSON.stringify(result));
+            } catch (e) {}
+            return result;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch Sheet1 sources via gviz:', err);
+  }
+
+  // 3. Fallback to default 8 sources from Google Sheet
+  return getStoredSheetSources();
 };

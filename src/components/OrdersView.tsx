@@ -25,7 +25,7 @@ import {
   User,
 } from 'lucide-react';
 import { Order, OrderStatus, Product, Sheet3ProductEntry } from '../types';
-import { updateOrderCardViaAppsScript, buildOrderCardPayload, getStoredListProductNames } from '../services/sheets';
+import { updateOrderCardViaAppsScript, buildOrderCardPayload, getStoredListProductNames, getStoredSheetSources } from '../services/sheets';
 import { groupItemsByDate } from '../utils/dateGrouping';
 
 /**
@@ -121,6 +121,7 @@ export interface OrdersViewProps {
   ) => Promise<boolean | void> | void;
   onDeleteOrder?: (order: Order) => void;
   listProductNames?: string[];
+  sheetSources?: string[];
 }
 
 type DropdownType = 'variant' | 'source' | 'status';
@@ -142,6 +143,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   onUpdateFullOrder,
   onDeleteOrder,
   listProductNames,
+  sheetSources,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -305,6 +307,9 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     }
     if (s.includes('pend') || s.includes('পেন্ডিং')) {
       return 'bg-[#1e293b] text-[#cbd5e1] border-[#334155]';
+    }
+    if (s.includes('insta') || s.includes('ইনস্টাগ্রাম')) {
+      return 'bg-[#431407] text-[#fdba74] border-[#ea580c]';
     }
     return 'bg-[#152544] text-[#93c5fd] border-[#1e3d70]';
   };
@@ -482,18 +487,10 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     return ['No Sellect', ...list];
   }, [listProductNames]);
 
-  // Column I (Source) options - verified from Google Sheet
-  const availableSources = [
-    'Website',
-    'Whatsapp',
-    'Call Direct',
-    'Messenger',
-    'Tiktok',
-    'Youtube',
-    'FB Ads',
-    'incomplete',
-    'Pending',
-  ];
+  // Column I (Source) options - 8 sources strictly read from Google Sheet
+  const availableSources = useMemo(() => {
+    return sheetSources && sheetSources.length >= 8 ? sheetSources.slice(0, 8) : getStoredSheetSources();
+  }, [sheetSources]);
 
   // Column J (Status) options - verified from Google Sheet
   const availableStatuses: OrderStatus[] = [

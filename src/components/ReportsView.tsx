@@ -50,6 +50,7 @@ import {
   ArrowLeft,
   Sparkles,
   PieChart,
+  Instagram,
 } from 'lucide-react';
 import { Order, Sheet1ProductReport, ProductReportSource } from '../types';
 import { fetchSheet1Reports, DEFAULT_SPREADSHEET_ID } from '../services/sheets';
@@ -619,6 +620,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     if (n.includes('tiktok')) return <Video className="w-4 h-4 text-pink-400 shrink-0" />;
     if (n.includes('call') || n.includes('phone')) return <Phone className="w-4 h-4 text-amber-400 shrink-0" />;
     if (n.includes('youtube') || n.includes('you')) return <Video className="w-4 h-4 text-rose-400 shrink-0" />;
+    if (n.includes('instagram') || n.includes('insta')) return <Instagram className="w-4 h-4 text-pink-400 shrink-0" />;
     return <Share2 className="w-4 h-4 text-gray-400 shrink-0" />;
   };
 

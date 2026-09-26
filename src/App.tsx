@@ -43,6 +43,9 @@ import {
   appendSheet3Entry,
   fetchSheet4ProfitData,
   fetchListSheetProductNames,
+  fetchSheetSources,
+  getStoredSheetSources,
+  DEFAULT_SHEET_SOURCES,
   updateOrderCardViaAppsScript,
   buildOrderCardPayload,
   sendSteadfastOrdersViaAppsScript,
@@ -296,6 +299,26 @@ export default function App() {
     }
   };
 
+  // Real-time 8 sources from Google Sheet
+  const [sheetSources, setSheetSources] = useState<string[]>(() => {
+    return getStoredSheetSources();
+  });
+
+  const loadSourcesLive = async (
+    targetSpreadsheetId: string = spreadsheetId,
+    token: string | null = accessToken
+  ) => {
+    try {
+      const cleanId = extractSpreadsheetId(targetSpreadsheetId);
+      const sources = await fetchSheetSources(cleanId, token);
+      if (sources && sources.length >= 8) {
+        setSheetSources(sources);
+      }
+    } catch (err) {
+      console.warn('Failed to live-load sheet sources:', err);
+    }
+  };
+
   // Modals state
   const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
   const [selectedOrderForView, setSelectedOrderForView] = useState<Order | null>(null);
@@ -472,11 +495,13 @@ export default function App() {
   // Real-time listener for Sheet 3, Sheet 4, List Sheet & Orders (Polling every 15s + Window Focus + Tab Visibility refresh)
   useEffect(() => {
     loadListNamesLive(spreadsheetId, accessToken);
+    loadSourcesLive(spreadsheetId, accessToken);
     loadSheet3StockLive(spreadsheetId);
     loadSheet4DataLive(spreadsheetId, accessToken);
     syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
     const interval = setInterval(() => {
       loadListNamesLive(spreadsheetId, accessToken);
+      loadSourcesLive(spreadsheetId, accessToken);
       loadSheet3StockLive(spreadsheetId);
       loadSheet4DataLive(spreadsheetId, accessToken);
       syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
@@ -484,6 +509,7 @@ export default function App() {
 
     const onFocus = () => {
       loadListNamesLive(spreadsheetId, accessToken);
+      loadSourcesLive(spreadsheetId, accessToken);
       loadSheet3StockLive(spreadsheetId);
       loadSheet4DataLive(spreadsheetId, accessToken);
       syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
@@ -491,6 +517,7 @@ export default function App() {
     const onVisibilityChange = () => {
       if (!document.hidden) {
         loadListNamesLive(spreadsheetId, accessToken);
+        loadSourcesLive(spreadsheetId, accessToken);
         loadSheet3StockLive(spreadsheetId);
         loadSheet4DataLive(spreadsheetId, accessToken);
         syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
@@ -539,6 +566,7 @@ export default function App() {
     try {
       const cleanId = extractSpreadsheetId(targetSpreadsheetId);
       loadListNamesLive(cleanId, targetToken || undefined);
+      loadSourcesLive(cleanId, targetToken || undefined);
       const sheetResult = await getSheetOrders(cleanId, targetToken || undefined, targetTab);
 
       if (sheetResult.orders && sheetResult.orders.length > 0) {
@@ -1739,6 +1767,7 @@ export default function App() {
               onUpdateFullOrder={handleUpdateFullOrder}
               onDeleteOrder={handleDeleteOrder}
               listProductNames={listProductNames}
+              sheetSources={sheetSources}
             />
           )}
 
@@ -1880,6 +1909,8 @@ export default function App() {
         onClose={() => setIsNewOrderOpen(false)}
         onSubmit={handleAddNewOrder}
         isSubmitting={isSubmittingOrder}
+        sheetSources={sheetSources}
+        listProductNames={listProductNames}
       />
 
       {/* View & Edit Order Modal */}
@@ -1896,6 +1927,7 @@ export default function App() {
         onDeleteOrder={handleDeleteOrder}
         onUpdateCustomerDetails={handleUpdateCustomerDetails}
         listProductNames={listProductNames}
+        sheetSources={sheetSources}
       />
 
       {/* Google Sheet Settings Modal */}

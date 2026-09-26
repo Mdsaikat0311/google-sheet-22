@@ -1,30 +1,26 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, Edit3, Calendar, Send, Loader2, Code2, Check } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
-import { getStoredListProductNames } from '../services/sheets';
+import { getStoredListProductNames, getStoredSheetSources, DEFAULT_SHEET_SOURCES } from '../services/sheets';
 
 interface NewOrderModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (order: Order) => Promise<void>;
   isSubmitting: boolean;
+  sheetSources?: string[];
+  listProductNames?: string[];
 }
 
 // Column H (Variant) options - strictly List Sheet Column B 6 products + No Sellect
-const getAvailableVariants = () => ['No Sellect', ...getStoredListProductNames()];
-
-// Column I (Source) options - verified from Google Sheet
-const availableSources = [
-  'Website',
-  'Whatsapp',
-  'Call Direct',
-  'Messenger',
-  'Tiktok',
-  'Youtube',
-  'FB Ads',
-  'incomplete',
-  'Pending',
+const getAvailableVariants = (names?: string[]) => [
+  'No Sellect',
+  ...(names && names.length >= 6 ? names.slice(0, 6) : getStoredListProductNames()),
 ];
+
+// Column I (Source) options - 8 sources strictly read from Google Sheet
+const getAvailableSources = (sources?: string[]) =>
+  sources && sources.length >= 8 ? sources.slice(0, 8) : getStoredSheetSources();
 
 // Column J (Status) options - verified from Google Sheet
 const availableStatuses: OrderStatus[] = [
@@ -57,8 +53,11 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   onClose,
   onSubmit,
   isSubmitting,
+  sheetSources,
+  listProductNames,
 }) => {
-  const availableVariants = useMemo(() => getAvailableVariants(), [isOpen]);
+  const availableVariants = useMemo(() => getAvailableVariants(listProductNames), [isOpen, listProductNames]);
+  const availableSources = useMemo(() => getAvailableSources(sheetSources), [isOpen, sheetSources]);
   const [invoiceId, setInvoiceId] = useState('');
   const [orderDateTime, setOrderDateTime] = useState('');
   const [customerName, setCustomerName] = useState('');

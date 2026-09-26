@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { getOrderImage } from '../utils/orderImage';
-import { getStoredListProductNames } from '../services/sheets';
+import { getStoredListProductNames, getStoredSheetSources, DEFAULT_SHEET_SOURCES } from '../services/sheets';
 
 interface ViewOrderModalProps {
   order: Order | null;
@@ -46,19 +46,10 @@ interface ViewOrderModalProps {
     }
   ) => Promise<boolean> | void;
   listProductNames?: string[];
+  sheetSources?: string[];
 }
 
-const AVAILABLE_SOURCES = [
-  'Website',
-  'Whatsapp',
-  'Call Direct',
-  'Messenger',
-  'Tiktok',
-  'Youtube',
-  'FB Ads',
-  'incomplete',
-  'Pending',
-];
+const AVAILABLE_SOURCES = DEFAULT_SHEET_SOURCES;
 
 const ORDER_STATUS_LIST: OrderStatus[] = [
   'Procecing',
@@ -84,9 +75,15 @@ export const ViewOrderModal: React.FC<ViewOrderModalProps> = ({
   onDeleteOrder,
   onUpdateCustomerDetails,
   listProductNames,
+  sheetSources,
 }) => {
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // 8 sources strictly read from Google Sheet
+  const availableSources = useMemo(() => {
+    return sheetSources && sheetSources.length >= 8 ? sheetSources.slice(0, 8) : getStoredSheetSources();
+  }, [sheetSources]);
 
   // Strictly the 6 products from List Sheet Column B + No Sellect
   const availableVariants = useMemo(() => {
@@ -432,8 +429,8 @@ export const ViewOrderModal: React.FC<ViewOrderModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 pt-1">
-              {AVAILABLE_SOURCES.map((src) => {
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 pt-1">
+              {availableSources.map((src) => {
                 const isSelected = (order.source || 'Website') === src;
                 return (
                   <button
